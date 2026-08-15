@@ -1,0 +1,97 @@
+# ================================
+# Python
+# ================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+uploaded_files/
+
+# Python cache / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ================================
+# Virtual Environments
+# ================================
+venv/
+.venv/
+env/
+ENV/
+
+# ================================
+# Environment Variables / Secrets
+# ================================
+.env
+.env.*
+!.env.example
+
+# ================================
+# Build / Distribution
+# ================================
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ================================
+# Jupyter
+# ================================
+.ipynb_checkpoints/
+
+# ================================
+# IDE / Editors
+# ================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ================================
+# OS Files
+# ================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ================================
+# Logs
+# ================================
+*.log
+logs/
+
+# ================================
+# Dash / Flask
+# ================================
+instance/
+.webassets-cache/
+
+# ================================
+# Local Data / Generated Files
+# Uncomment if these should NOT be committed
+# ================================
+# data/
+# *.csv
+# *.xlsx
+# *.parquet
+# *.db
+# *.sqlite
+# *.sqlite3
+
+# ================================
+# Temporary Files
+# ================================
+tmp/
+temp/
+*.tmp
+
+# ================================
+# Deployment
+# ================================
+.vercel/
