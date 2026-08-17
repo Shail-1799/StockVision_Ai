@@ -34,17 +34,34 @@ def render_grid(_):
         rowData=df.to_dict("records"),
         columnDefs=[
             {"field": "recurring", "headerName": "", "maxWidth": 130},
-            {"field": "product_alias", "headerName": "Product Alias","minWidth": 300,
-                    "maxWidth": 300,},
-            {"field": "total_required_quantity", "headerName": "Total Qty","minWidth": 150,
-                    "maxWidth": 150,},
-            {"field": "times_missing", "headerName": "Times Missing","minWidth": 150,
-                    "maxWidth": 150,},
+            {
+                "field": "product_alias",
+                "headerName": "Product Alias",
+                "minWidth": 300,
+                "maxWidth": 300,
+            },
+            {
+                "field": "total_required_quantity",
+                "headerName": "Total Qty",
+                "minWidth": 150,
+                "maxWidth": 150,
+            },
+            {
+                "field": "times_missing",
+                "headerName": "Times Missing",
+                "minWidth": 150,
+                "maxWidth": 150,
+            },
             {"field": "last_retailer", "headerName": "Last Retailer"},
             {"field": "last_seen", "headerName": "Last Seen"},
         ],
         columnSize="responsiveSizeToFit",
-        defaultColDef={"sortable": True, "filter": True, "resizable": True},
+        defaultColDef={
+            "sortable": True,
+            "filter": True,
+            "floatingFilter": True,
+            "resizable": True,
+        },
         dashGridOptions={
             "rowSelection": "single",
             "pagination": True,
@@ -70,7 +87,12 @@ def show_history(selected_rows):
             dag.AgGrid(
                 rowData=df.to_dict("records"),
                 columnDefs=[{"field": c} for c in df.columns],
-                defaultColDef={"sortable": True, "filter": True, "resizable": True},
+                defaultColDef={
+                    "sortable": True,
+                    "filter": True,
+                    "floatingFilter": True,
+                    "resizable": True,
+                },
                 style={"height": "300px"},
             ),
         ]

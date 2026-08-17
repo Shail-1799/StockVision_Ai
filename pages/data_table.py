@@ -108,7 +108,7 @@ def render_grid(_):
         id="data-grid",
         rowData=df.sort_values(by="id", ascending=False).to_dict("records"),
         columnDefs=COLUMN_DEFS,
-        defaultColDef={"sortable": True, "filter": True, "resizable": True},
+        defaultColDef={"sortable": True, "filter": True, "floatingFilter": True, "resizable": True},
         columnSize="responsiveSizeToFit",
         dashGridOptions={
             "rowSelection": "multiple",

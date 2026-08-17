@@ -115,11 +115,20 @@ def update_retailer_reliability(_):
             {"field": "order_count", "headerName": "Orders", "maxWidth": 100},
             {"field": "shortage_rows", "headerName": "Shortage Rows", "maxWidth": 130},
             {"field": "shortage_qty", "headerName": "Shortage Qty", "maxWidth": 130},
-            {"field": "shortage_rate_pct", "headerName": "Shortage Rate %", "maxWidth": 140},
+            {
+                "field": "shortage_rate_pct",
+                "headerName": "Shortage Rate %",
+                "maxWidth": 140,
+            },
             {"field": "last_order", "headerName": "Last Order"},
         ],
         columnSize="responsiveSizeToFit",
-        defaultColDef={"sortable": True, "filter": True, "resizable": True},
+        defaultColDef={
+            "sortable": True,
+            "filter": True,
+            "floatingFilter": True,
+            "resizable": True,
+        },
         dashGridOptions={"pagination": True, "paginationPageSize": 10},
         style={"height": "340px"},
     )
@@ -140,7 +149,12 @@ def update_user_activity(_):
             {"field": "last_upload", "headerName": "Last Upload"},
         ],
         columnSize="responsiveSizeToFit",
-        defaultColDef={"sortable": True, "filter": True, "resizable": True},
+        defaultColDef={
+            "sortable": True,
+            "filter": True,
+            "floatingFilter": True,
+            "resizable": True,
+        },
         dashGridOptions={"pagination": True, "paginationPageSize": 10},
         style={"height": "340px"},
     )

@@ -5,7 +5,26 @@ from contextlib import contextmanager
 import config
 from database.models import Base, AppSetting, AppUser
 
-engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
+# check_same_thread is a SQLite-only DBAPI option - passing it to psycopg2
+# (Postgres) crashes with "invalid dsn: invalid connection option" before
+# the app even boots. Build connect_args/pool settings per-dialect instead
+# of assuming SQLite.
+_is_sqlite = config.DATABASE_URL.startswith("sqlite")
+
+if _is_sqlite:
+    engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(
+        config.DATABASE_URL,
+        # pool_pre_ping: tests each connection with a cheap ping before handing
+        # it out, so a connection Supabase's pooler silently closed while idle
+        # (common on the free/session pooler after some minutes of no traffic)
+        # gets transparently replaced instead of surfacing as a query error.
+        pool_pre_ping=True,
+        # pool_recycle: proactively retire connections before Supavisor's own
+        # idle/max-lifetime limits close them out from under us.
+        pool_recycle=300,
+    )
 SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
 
 # Columns added after the initial release. create_all() only creates missing

@@ -148,8 +148,17 @@ def render_orders_grid(_):
             {"field": "uploaded_by", "headerName": "Uploaded By", "maxWidth": 140},
             {"field": "uploaded", "headerName": "Uploaded"},
         ],
-        defaultColDef={"sortable": True, "filter": True, "resizable": True},
-        dashGridOptions={"rowSelection": "single", "pagination": True, "paginationPageSize": 15},
+        defaultColDef={
+            "sortable": True,
+            "filter": True,
+            "floatingFilter": True,
+            "resizable": True,
+        },
+        dashGridOptions={
+            "rowSelection": "single",
+            "pagination": True,
+            "paginationPageSize": 15,
+        },
         style={"height": "400px"},
     )
 
@@ -203,7 +212,12 @@ def show_order_detail(selected_rows):
             id="order-detail-grid",
             rowData=detail_df.to_dict("records"),
             columnDefs=editable_defs,
-            defaultColDef={"sortable": True, "filter": True, "resizable": True},
+            defaultColDef={
+                "sortable": True,
+                "filter": True,
+                "floatingFilter": True,
+                "resizable": True,
+            },
             dashGridOptions={"stopEditingWhenCellsLoseFocus": True},
             style={"height": "300px"},
         )
