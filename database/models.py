@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, ForeignKey, Text
+    Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean
 )
 from sqlalchemy.orm import relationship, declarative_base
 
@@ -14,10 +14,26 @@ class ImageRecord(Base):
     id = Column(Integer, primary_key=True)
     filename = Column(String, nullable=False)
     filepath = Column(String, nullable=False)
+    # Path to the image actually shown for verification (enhanced/deskewed
+    # version - closest to what the model saw). Falls back to filepath if
+    # processing failed before this was set.
+    display_path = Column(String, nullable=True)
     retailer_name = Column(String, default="Unknown Retailer")
     upload_date = Column(DateTime, default=datetime.utcnow)
     processing_status = Column(String, default="pending")  # pending/processing/done/failed
     error_message = Column(Text, nullable=True)
+
+    # Who uploaded this (free-text name picked from the navbar dropdown -
+    # no password, no accounts, just attribution for a small shared team).
+    uploaded_by = Column(String, nullable=True, default="")
+
+    # Duplicate detection - see services/dedup.py.
+    content_hash = Column(String, nullable=True, index=True)  # SHA-256 of raw file bytes
+    phash = Column(String, nullable=True)  # perceptual hash of the enhanced image
+
+    # Rough Groq token usage for this image's extraction call(s) - a cost/
+    # usage trend indicator, not a live per-minute quota gauge.
+    tokens_used = Column(Integer, nullable=True, default=0)
 
     order = relationship("OrderRecord", back_populates="image", uselist=False)
     missing_products = relationship("MissingProduct", back_populates="image")
@@ -30,7 +46,7 @@ class OrderRecord(Base):
     id = Column(Integer, primary_key=True)
     image_id = Column(Integer, ForeignKey("images.id"), nullable=False)
     retailer_name = Column(String, default="Unknown Retailer")
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
 
     # order_label: the "Order ID" shown/edited in the data table. Shared by
     # every row extracted from the same sheet/image. Defaults to the numeric
@@ -64,7 +80,7 @@ class MissingProduct(Base):
     # pending = needs manual review, accepted = counted in aggregation, rejected = ignored
     status = Column(String, default="pending")
 
-    created_at = Column(DateTime, default=datetime.now())
+    created_at = Column(DateTime, default=datetime.now)
 
     order = relationship("OrderRecord", back_populates="missing_products")
     image = relationship("ImageRecord", back_populates="missing_products")
@@ -80,6 +96,21 @@ class ProductMaster(Base):
     category = Column(String, nullable=True)
     mrp = Column(Float, nullable=True)
     current_stock = Column(Float, nullable=True)
+    # Minimum order quantity - if set, Reports export rounds a purchase
+    # order up to this instead of the raw shortfall.
+    moq = Column(Float, nullable=True)
+
+
+class AppUser(Base):
+    """Lightweight, password-free user list - a name picked from a navbar
+    dropdown so uploads/edits can be attributed, plus an admin flag that
+    gates the Insights page. No login, no security boundary - by design,
+    for a small trusted team."""
+    __tablename__ = "app_users"
+
+    name = Column(String, primary_key=True)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
 
 
 class AppSetting(Base):

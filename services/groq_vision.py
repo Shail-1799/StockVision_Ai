@@ -200,10 +200,10 @@ def _strip_to_json(text: str) -> dict:
     return json.loads(text)
 
 
-def _call_with_retry(client: Groq, model: str, image_path: str, prompt_text: str) -> str:
+def _call_with_retry(client: Groq, model: str, image_path: str, prompt_text: str) -> tuple[str, int]:
     """Runs the chat completion, automatically recovering from the two
     transient Groq failure modes: rate limiting (429) and request-too-large
-    (413). Everything else is raised immediately."""
+    (413). Everything else is raised immediately. Returns (content, total_tokens_used)."""
     max_dim = INITIAL_MAX_DIM
     quality = 88
     max_tokens = INITIAL_MAX_TOKENS
@@ -236,7 +236,12 @@ def _call_with_retry(client: Groq, model: str, image_path: str, prompt_text: str
             content = response.choices[0].message.content
             if not content or not content.strip():
                 raise GroqVisionError("Empty response from vision model")
-            return content
+            tokens_used = 0
+            try:
+                tokens_used = int(response.usage.total_tokens)
+            except Exception:
+                pass
+            return content, tokens_used
 
         except APIStatusError as e:
             last_error = e
@@ -284,12 +289,13 @@ def _call_with_retry(client: Groq, model: str, image_path: str, prompt_text: str
 
 def extract_document(image_path: str) -> dict:
     """Returns {"retailer_name": str, "order_date": str,
-    "rotate_clockwise_degrees": int, "rows": [...]} for one order sheet
-    image. `rows` contains only the X-marked (unavailable) line items."""
+    "rotate_clockwise_degrees": int, "tokens_used": int, "rows": [...]} for
+    one order sheet image. `rows` contains only the X-marked (unavailable)
+    line items."""
     client = _get_client()
     model = get_setting("groq_model", config.GROQ_MODEL_DEFAULT)
 
-    raw_text = _call_with_retry(
+    raw_text, tokens_used = _call_with_retry(
         client,
         model,
         image_path,
@@ -337,6 +343,7 @@ def extract_document(image_path: str) -> dict:
         "retailer_name": retailer_name,
         "order_date": order_date,
         "rotate_clockwise_degrees": rotate,
+        "tokens_used": tokens_used,
         "rows": cleaned,
     }
 

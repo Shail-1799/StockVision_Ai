@@ -18,11 +18,13 @@ layout = html.Div(
                 [
                     html.H5("Export Purchase List"),
                     html.P(
-                        "Generates an Excel workbook: Sheet 1 is the aggregated "
-                        "next-purchase-order summary, Sheet 2 is the full detailed history.",
+                        "Generates an Excel workbook: Sheet 1 is the aggregated next-purchase-order "
+                        "summary (rounded up to each product's MOQ where one is set), Sheet 2 is the "
+                        "full detailed history.",
                         className="text-muted",
                     ),
                     dbc.Button("📥 Export to Excel", id="export-btn", color="primary"),
+                    dcc.Download(id="download-export"),
                     html.Div(id="export-result", className="mt-3"),
                 ]
             ),
@@ -34,8 +36,8 @@ layout = html.Div(
                     html.H5("Import Product Master (optional)"),
                     html.P(
                         "Upload a CSV/Excel with columns: Product Alias, Product Name, "
-                        "Brand, Category, MRP, Current Stock. Used to validate/auto-correct "
-                        "OCR'd aliases.",
+                        "Brand, Category, MRP, Current Stock, MOQ. Used to validate/auto-correct "
+                        "OCR'd aliases and to round purchase orders up to a minimum order quantity.",
                         className="text-muted",
                     ),
                     dcc.Upload(
@@ -63,18 +65,19 @@ layout = html.Div(
 
 @callback(
     Output("export-result", "children"),
+    Output("download-export", "data"),
     Input("export-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def do_export(n_clicks):
     try:
         path = export_to_excel()
-        return dbc.Alert(
-            f"✅ Exported to: {path}  (open it directly from your local exports/ folder)",
-            color="success",
+        return (
+            dbc.Alert("✅ Export ready - downloading now.", color="success"),
+            dcc.send_file(path),
         )
     except Exception as e:
-        return dbc.Alert(f"❌ Export failed: {e}", color="danger")
+        return dbc.Alert(f"❌ Export failed: {e}", color="danger"), dash.no_update
 
 
 @callback(

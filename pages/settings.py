@@ -7,6 +7,7 @@ import dash_bootstrap_components as dbc
 
 import config
 from database.db import get_setting, set_setting
+from services.aggregator import get_users, add_user, remove_user
 
 dash.register_page(__name__, path="/settings", name="Settings")
 
@@ -39,8 +40,36 @@ layout = html.Div(
                     dbc.Input(id="fuzzy-threshold-input", type="number", min=0, max=100, step=1),
                     dbc.Label("Product alias regex", className="mt-2"),
                     dbc.Input(id="alias-regex-input", type="text"),
+                    dbc.Label("Blur rejection threshold (lower = stricter)", className="mt-2"),
+                    dbc.Input(id="blur-threshold-input", type="number", min=0, step=1),
+                    dbc.Label("Recurring-shortage alert - flag after this many misses", className="mt-2"),
+                    dbc.Input(id="reorder-threshold-input", type="number", min=1, step=1),
                     dbc.Button("Save Thresholds", id="save-thresholds-btn", color="primary", className="mt-3"),
                     html.Div(id="save-thresholds-result", className="mt-2"),
+                ]
+            ),
+            className="mb-4 shadow-sm",
+        ),
+        dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H5("Team (no password - just attribution)"),
+                    html.P(
+                        "Names people pick from the dropdown in the top-right when uploading/editing. "
+                        "Admin-checked names see the Insights page. This is a convenience list, not a "
+                        "login system - anyone can pick any name.",
+                        className="text-muted small",
+                    ),
+                    html.Div(id="users-table"),
+                    dbc.Row(
+                        [
+                            dbc.Col(dbc.Input(id="new-user-name-input", placeholder="Name"), md=5),
+                            dbc.Col(dbc.Checklist(id="new-user-admin-check", options=[{"label": "Admin", "value": "admin"}], value=[]), md=3),
+                            dbc.Col(dbc.Button("Add / Update", id="add-user-btn", color="primary", size="sm"), md=4),
+                        ],
+                        className="mt-2 g-2 align-items-center",
+                    ),
+                    html.Div(id="user-mgmt-result", className="mt-2"),
                 ]
             ),
             className="mb-4 shadow-sm",
@@ -67,6 +96,8 @@ layout = html.Div(
     Output("cross-threshold-input", "value"),
     Output("fuzzy-threshold-input", "value"),
     Output("alias-regex-input", "value"),
+    Output("blur-threshold-input", "value"),
+    Output("reorder-threshold-input", "value"),
     Input("groq-model-input", "id"),  # fires once on page load
 )
 def load_settings(_):
@@ -77,6 +108,8 @@ def load_settings(_):
         float(get_setting("cross_confidence_threshold", config.DEFAULT_CROSS_CONFIDENCE_THRESHOLD)),
         float(get_setting("fuzzy_match_threshold", 85)),
         get_setting("alias_regex", config.DEFAULT_ALIAS_REGEX),
+        float(get_setting("blur_variance_threshold", 40)),
+        int(float(get_setting("reorder_alert_min_times", 3))),
     )
 
 
@@ -102,14 +135,69 @@ def save_groq(n_clicks, api_key, model_name):
     State("cross-threshold-input", "value"),
     State("fuzzy-threshold-input", "value"),
     State("alias-regex-input", "value"),
+    State("blur-threshold-input", "value"),
+    State("reorder-threshold-input", "value"),
     prevent_initial_call=True,
 )
-def save_thresholds(n_clicks, ocr_t, cross_t, fuzzy_t, regex):
+def save_thresholds(n_clicks, ocr_t, cross_t, fuzzy_t, regex, blur_t, reorder_t):
     set_setting("ocr_confidence_threshold", ocr_t)
     set_setting("cross_confidence_threshold", cross_t)
     set_setting("fuzzy_match_threshold", fuzzy_t)
     set_setting("alias_regex", regex)
+    if blur_t is not None:
+        set_setting("blur_variance_threshold", blur_t)
+    if reorder_t is not None:
+        set_setting("reorder_alert_min_times", reorder_t)
     return dbc.Alert("✅ Thresholds saved.", color="success", duration=3000)
+
+
+@callback(
+    Output("users-table", "children"),
+    Input("user-mgmt-result", "children"),
+    Input("save-groq-btn", "id"),  # fires once on load too
+)
+def render_users_table(_a, _b):
+    users = get_users()
+    if not users:
+        return dbc.Alert("No users yet - add one below.", color="info")
+    rows = [
+        html.Tr(
+            [
+                html.Td(u["name"]),
+                html.Td("✅" if u["is_admin"] else ""),
+                html.Td(dbc.Button("Remove", id={"type": "remove-user-btn", "index": u["name"]}, size="sm", color="danger", outline=True)),
+            ]
+        )
+        for u in users
+    ]
+    return dbc.Table(
+        [html.Thead(html.Tr([html.Th("Name"), html.Th("Admin"), html.Th("")]))] + [html.Tbody(rows)],
+        bordered=False,
+        hover=True,
+        size="sm",
+    )
+
+
+@callback(
+    Output("user-mgmt-result", "children"),
+    Output("new-user-name-input", "value"),
+    Input("add-user-btn", "n_clicks"),
+    Input({"type": "remove-user-btn", "index": dash.ALL}, "n_clicks"),
+    State("new-user-name-input", "value"),
+    State("new-user-admin-check", "value"),
+    prevent_initial_call=True,
+)
+def manage_users(add_clicks, remove_clicks, new_name, admin_checked):
+    triggered = dash.ctx.triggered_id
+    if triggered == "add-user-btn":
+        if not (new_name or "").strip():
+            return dbc.Alert("Enter a name first.", color="warning", duration=2000), dash.no_update
+        add_user(new_name.strip(), is_admin="admin" in (admin_checked or []))
+        return dbc.Alert(f"✅ Saved {new_name.strip()}.", color="success", duration=2000), ""
+    if isinstance(triggered, dict) and triggered.get("type") == "remove-user-btn":
+        remove_user(triggered["index"])
+        return dbc.Alert(f"Removed {triggered['index']}.", color="secondary", duration=2000), dash.no_update
+    return dash.no_update, dash.no_update
 
 
 @callback(

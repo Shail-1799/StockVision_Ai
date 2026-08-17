@@ -68,7 +68,14 @@ APP_TITLE = "StockVision AI"
 APP_PORT = int(os.environ.get("PORT", 8050))
 
 # --- Image rotation correction ---
-# 0/90/180/270 gross-rotation + fine skew is detected with a cheap Groq vision
-# call before the main extraction call. If that fails (no key yet, network
-# hiccup, etc) we fall back to a local OpenCV-only fine-skew estimate.
+# Small-angle skew is straightened locally via OpenCV (services/rotation.py) -
+# no API call. Gross 90/180/270 rotation is reported as an extra field on
+# the same Groq extraction call rather than a separate request. Set to
+# "false" to skip local deskewing entirely (rarely needed).
 AUTO_ROTATE_ENABLED = os.environ.get("AUTO_ROTATE_ENABLED", "true").lower() != "false"
+
+# --- Multi-user note ---
+# With several people uploading at once, SQLite's single-writer file lock
+# can serialize/stall concurrent uploads. For ~10 concurrent users, set a
+# real DATABASE_URL (Postgres) as above - the app already supports it,
+# nothing else to change.

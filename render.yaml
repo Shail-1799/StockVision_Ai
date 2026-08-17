@@ -1,0 +1,17 @@
+# Optional infra-as-code file - lets Render create the service from this
+# repo automatically ("New +" -> "Blueprint" in the Render dashboard)
+# instead of clicking through the manual setup. Either approach works.
+services:
+  - type: web
+    name: stockvision-ai
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn wsgi:app --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false          # set manually in the dashboard - don't commit secrets
+      - key: DATABASE_URL
+        sync: false          # your Supabase connection string - set manually
+      - key: PYTHON_VERSION
+        value: 3.12.0

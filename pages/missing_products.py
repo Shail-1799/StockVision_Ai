@@ -33,6 +33,7 @@ def render_grid(_):
         id="mp-grid",
         rowData=df.to_dict("records"),
         columnDefs=[
+            {"field": "recurring", "headerName": "", "maxWidth": 130},
             {"field": "product_alias", "headerName": "Product Alias","minWidth": 300,
                     "maxWidth": 300,},
             {"field": "total_required_quantity", "headerName": "Total Qty","minWidth": 150,

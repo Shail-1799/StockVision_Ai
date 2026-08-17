@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from contextlib import contextmanager
 
 import config
-from database.models import Base, AppSetting
+from database.models import Base, AppSetting, AppUser
 
 engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
@@ -15,6 +15,16 @@ _NEW_COLUMNS = {
     "orders": [
         ("order_label", "VARCHAR"),
         ("order_date", "VARCHAR"),
+    ],
+    "images": [
+        ("content_hash", "VARCHAR"),
+        ("phash", "VARCHAR"),
+        ("uploaded_by", "VARCHAR"),
+        ("display_path", "VARCHAR"),
+        ("tokens_used", "INTEGER"),
+    ],
+    "product_master": [
+        ("moq", "FLOAT"),
     ],
 }
 
@@ -36,6 +46,7 @@ def init_db():
     Base.metadata.create_all(engine)
     _run_light_migrations()
     _seed_default_settings()
+    _seed_default_users()
 
 
 def _seed_default_settings():
@@ -45,12 +56,22 @@ def _seed_default_settings():
         "cross_confidence_threshold": str(config.DEFAULT_CROSS_CONFIDENCE_THRESHOLD),
         "alias_regex": config.DEFAULT_ALIAS_REGEX,
         "fuzzy_match_threshold": "85",  # rapidfuzz score 0-100 vs product master
+        "blur_variance_threshold": "40",  # Laplacian variance - below this, reject as too blurry
+        "reorder_alert_min_times": "3",  # recurring-shortage alert threshold
     }
     with session_scope() as s:
         existing = {row.key for row in s.query(AppSetting.key).all()}
         for k, v in defaults.items():
             if k not in existing:
                 s.add(AppSetting(key=k, value=v))
+
+
+def _seed_default_users():
+    """First run only - so the app isn't unusable before anyone visits
+    Settings to add real names. Safe to call repeatedly."""
+    with session_scope() as s:
+        if s.query(AppUser).count() == 0:
+            s.add(AppUser(name="Admin", is_admin=True))
 
 
 @contextmanager

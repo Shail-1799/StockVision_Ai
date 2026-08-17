@@ -3,6 +3,7 @@ import os
 import dash
 import dash_bootstrap_components as dbc
 from dash import html, page_container
+from flask import send_from_directory, abort
 
 import config
 from database.db import init_db
@@ -21,6 +22,19 @@ app = dash.Dash(
     title=config.APP_TITLE,
 )
 server = app.server  # Flask WSGI app - this is what Vercel/gunicorn serve
+
+
+@server.route("/media/<path:filename>")
+def serve_media(filename):
+    """Serves uploaded/processed images for the side-by-side verify views
+    (Orders detail, All Records selection). Only ever serves a bare filename
+    (no path traversal) from the two known local directories."""
+    filename = os.path.basename(filename)
+    for base_dir in (config.PROCESSED_DIR, config.UPLOADS_DIR):
+        candidate = base_dir / filename
+        if candidate.exists():
+            return send_from_directory(base_dir, filename)
+    abort(404)
 
 app.index_string = """<!DOCTYPE html>
 <html>

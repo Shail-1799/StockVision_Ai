@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import func
 
-from database.db import session_scope
-from database.models import MissingProduct, ImageRecord, OrderRecord
+from database.db import session_scope, get_setting
+from database.models import MissingProduct, ImageRecord, OrderRecord, AppUser, ProductMaster
 
 EDITABLE_FIELDS = {
     "product_alias",
@@ -18,7 +18,7 @@ ORDER_LEVEL_FIELDS = {
     "order_date": "order_date",
 }
 
-MANUAL_ENTRY_Retailer = "Manual Entry"
+MANUAL_ENTRY_RETAILER = "Manual Entry"
 
 
 def get_all_missing_products() -> list[dict]:
@@ -38,6 +38,7 @@ def get_all_missing_products() -> list[dict]:
                 "required_quantity": mp.required_quantity,
                 "retailer": o.retailer_name,
                 "filename": img.filename,
+                "uploaded_by": img.uploaded_by or "",
                 "row_sr_no": mp.row_sr_no,
                 "order_id": o.order_label or "",
                 "order_date": o.order_date or "",
@@ -47,34 +48,68 @@ def get_all_missing_products() -> list[dict]:
         ]
 
 
-def update_missing_product_field(row_id: int, field: str, value) -> bool:
-    """Used by every editable AG Grid in the app - persists a single cell edit.
-    order_id / order_date are stored on the shared OrderRecord, so editing
-    either one from any row updates it for every row from that same sheet."""
+def get_missing_product_with_image(row_id: int) -> dict | None:
+    """One row plus enough context to render the side-by-side verify view:
+    the source image path and the rest of that row's fields."""
+    with session_scope() as s:
+        result = (
+            s.query(MissingProduct, OrderRecord, ImageRecord)
+            .join(OrderRecord, MissingProduct.order_id == OrderRecord.id)
+            .join(ImageRecord, MissingProduct.image_id == ImageRecord.id)
+            .filter(MissingProduct.id == row_id)
+            .first()
+        )
+        if not result:
+            return None
+        mp, o, img = result
+        return {
+            "id": mp.id,
+            "product_alias": mp.product_alias,
+            "required_quantity": mp.required_quantity,
+            "row_sr_no": mp.row_sr_no,
+            "raw_row_text": mp.raw_row_text,
+            "ocr_confidence": mp.ocr_confidence,
+            "cross_confidence": mp.cross_confidence,
+            "status": mp.status,
+            "retailer": o.retailer_name,
+            "order_date": o.order_date or "",
+            "filename": img.filename,
+            "image_id": img.id,
+            "uploaded_by": img.uploaded_by or "",
+        }
+
+
+def update_missing_product_field(row_id: int, field: str, value) -> tuple[bool, object]:
+    """Used by every editable AG Grid in the app - persists a single cell
+    edit. order_id / order_date are stored on the shared OrderRecord, so
+    editing either one from any row updates it for every row from that same
+    sheet. Returns (ok, previous_value) so callers can offer Undo."""
     if field in ORDER_LEVEL_FIELDS:
         with session_scope() as s:
             row = s.get(MissingProduct, row_id)
             if not row:
-                return False
+                return False, None
             order = s.get(OrderRecord, row.order_id)
             if not order:
-                return False
+                return False, None
+            old_value = getattr(order, ORDER_LEVEL_FIELDS[field])
             setattr(order, ORDER_LEVEL_FIELDS[field], str(value or ""))
-            return True
+            return True, old_value
 
     if field not in EDITABLE_FIELDS:
-        return False
+        return False, None
     with session_scope() as s:
         row = s.get(MissingProduct, row_id)
         if not row:
-            return False
+            return False, None
+        old_value = getattr(row, field)
         if field == "required_quantity":
             try:
                 value = float(value)
             except (TypeError, ValueError):
-                return False
+                return False, None
         setattr(row, field, value)
-        return True
+        return True, old_value
 
 
 def delete_missing_products(row_ids: list[int]) -> int:
@@ -95,7 +130,7 @@ def get_or_create_manual_source() -> tuple[int, int]:
     with session_scope() as s:
         img = (
             s.query(ImageRecord)
-            .filter(ImageRecord.retailer_name == MANUAL_ENTRY_Retailer)
+            .filter(ImageRecord.retailer_name == MANUAL_ENTRY_RETAILER)
             .filter(ImageRecord.filename == "Manual Entry Log")
             .first()
         )
@@ -106,7 +141,7 @@ def get_or_create_manual_source() -> tuple[int, int]:
         img = ImageRecord(
             filename="Manual Entry Log",
             filepath="",
-            retailer_name=MANUAL_ENTRY_Retailer,
+            retailer_name=MANUAL_ENTRY_RETAILER,
             processing_status="done",
         )
         s.add(img)
@@ -115,7 +150,7 @@ def get_or_create_manual_source() -> tuple[int, int]:
         # get no default Order ID or Order Date; the user types their own.
         order = OrderRecord(
             image_id=img.id,
-            retailer_name=MANUAL_ENTRY_Retailer,
+            retailer_name=MANUAL_ENTRY_RETAILER,
             order_label="",
             order_date="",
         )
@@ -146,6 +181,7 @@ def add_manual_row(product_alias: str = "NEW-ITEM", required_quantity: float = 0
 
 def get_aggregated_products(status="accepted") -> list[dict]:
     """Group accepted rows by product_alias, summing quantity across all uploads."""
+    reorder_min_times = int(float(get_setting("reorder_alert_min_times", 3)))
     with session_scope() as s:
         q = (
             s.query(
@@ -174,6 +210,7 @@ def get_aggregated_products(status="accepted") -> list[dict]:
                     "times_missing": times_missing,
                     "last_seen": last_seen,
                     "last_retailer": last_retailer[0] if last_retailer else "",
+                    "recurring": "🔥 Recurring" if times_missing >= reorder_min_times else "",
                 }
             )
         return results
@@ -267,6 +304,12 @@ def get_dashboard_stats() -> dict:
         )
         all_rows = s.query(func.count(MissingProduct.id)).scalar() or 0
         avg_ocr_conf = s.query(func.avg(MissingProduct.ocr_confidence)).scalar() or 0
+        failed_uploads = (
+            s.query(func.count(ImageRecord.id))
+            .filter(ImageRecord.processing_status == "failed")
+            .scalar()
+            or 0
+        )
 
         return {
             "images_uploaded": images_uploaded,
@@ -279,6 +322,7 @@ def get_dashboard_stats() -> dict:
             .scalar()
             or 0,
             "total_rows_extracted": all_rows,
+            "failed_uploads": failed_uploads,
         }
 
 
@@ -314,3 +358,194 @@ def get_retailer_distribution() -> list[dict]:
 
 def get_top_missing_products(limit: int = 10) -> list[dict]:
     return get_aggregated_products()[:limit]
+
+
+def get_ocr_confidence_histogram() -> list[dict]:
+    """Bucketed OCR confidence distribution, for a data-quality view."""
+    with session_scope() as s:
+        confs = [
+            c for (c,) in s.query(MissingProduct.ocr_confidence).all() if c is not None
+        ]
+    buckets = ["0-0.5", "0.5-0.7", "0.7-0.8", "0.8-0.9", "0.9-1.0"]
+    counts = [0, 0, 0, 0, 0]
+    for c in confs:
+        if c < 0.5:
+            counts[0] += 1
+        elif c < 0.7:
+            counts[1] += 1
+        elif c < 0.8:
+            counts[2] += 1
+        elif c < 0.9:
+            counts[3] += 1
+        else:
+            counts[4] += 1
+    return [{"bucket": b, "count": c} for b, c in zip(buckets, counts)]
+
+
+def get_reorder_alerts(min_times: int = None) -> list[dict]:
+    """Products that have shown up as unavailable repeatedly, not just
+    once - the real signal something needs restocking permanently rather
+    than a one-off supply hiccup."""
+    if min_times is None:
+        min_times = int(float(get_setting("reorder_alert_min_times", 3)))
+    return [r for r in get_aggregated_products() if r["times_missing"] >= min_times]
+
+
+def get_retailer_reliability() -> list[dict]:
+    """Per-retailer rollup: how many orders, how often something was
+    unavailable, total shortage quantity, most recent order - useful for
+    spotting which retailer to renegotiate with or move away from."""
+    with session_scope() as s:
+        orders = (
+            s.query(
+                OrderRecord.retailer_name,
+                func.count(func.distinct(OrderRecord.id)).label("order_count"),
+                func.max(OrderRecord.created_at).label("last_order"),
+            )
+            .join(ImageRecord, OrderRecord.image_id == ImageRecord.id)
+            .filter(ImageRecord.processing_status == "done")
+            .group_by(OrderRecord.retailer_name)
+            .all()
+        )
+        shortages = dict(
+            s.query(
+                OrderRecord.retailer_name,
+                func.count(MissingProduct.id),
+            )
+            .join(MissingProduct, MissingProduct.order_id == OrderRecord.id)
+            .filter(MissingProduct.status == "accepted")
+            .group_by(OrderRecord.retailer_name)
+            .all()
+        )
+        shortage_qty = dict(
+            s.query(
+                OrderRecord.retailer_name,
+                func.sum(MissingProduct.required_quantity),
+            )
+            .join(MissingProduct, MissingProduct.order_id == OrderRecord.id)
+            .filter(MissingProduct.status == "accepted")
+            .group_by(OrderRecord.retailer_name)
+            .all()
+        )
+
+    results = []
+    for retailer, order_count, last_order in orders:
+        shortage_rows = shortages.get(retailer, 0) or 0
+        results.append(
+            {
+                "retailer": retailer,
+                "order_count": order_count,
+                "shortage_rows": shortage_rows,
+                "shortage_qty": round(shortage_qty.get(retailer, 0) or 0, 2),
+                "shortage_rate_pct": round((shortage_rows / order_count) * 100, 1) if order_count else 0,
+                "last_order": last_order.strftime("%d %B %Y") if last_order else "",
+            }
+        )
+    results.sort(key=lambda r: r["shortage_qty"], reverse=True)
+    return results
+
+
+def get_user_activity() -> list[dict]:
+    """Per-user upload counts - admin-only team activity view."""
+    with session_scope() as s:
+        rows = (
+            s.query(
+                ImageRecord.uploaded_by,
+                func.count(ImageRecord.id).label("uploads"),
+                func.sum(func.coalesce(ImageRecord.tokens_used, 0)).label("tokens"),
+                func.max(ImageRecord.upload_date).label("last_upload"),
+            )
+            .filter(ImageRecord.uploaded_by.isnot(None))
+            .filter(ImageRecord.uploaded_by != "")
+            .group_by(ImageRecord.uploaded_by)
+            .order_by(func.count(ImageRecord.id).desc())
+            .all()
+        )
+        return [
+            {
+                "uploaded_by": r.uploaded_by,
+                "uploads": r.uploads,
+                "tokens_used": r.tokens or 0,
+                "last_upload": r.last_upload.strftime("%d %B %Y %H:%M") if r.last_upload else "",
+            }
+            for r in rows
+        ]
+
+
+def get_groq_usage_today() -> dict:
+    """Rough daily token-usage total - a cost/trend indicator, not a live
+    per-minute quota gauge (Groq's limit is per-minute, this is per-day)."""
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    with session_scope() as s:
+        total = (
+            s.query(func.sum(func.coalesce(ImageRecord.tokens_used, 0)))
+            .filter(ImageRecord.upload_date >= today_start)
+            .scalar()
+            or 0
+        )
+        calls = (
+            s.query(func.count(ImageRecord.id))
+            .filter(ImageRecord.upload_date >= today_start)
+            .scalar()
+            or 0
+        )
+    return {"tokens_today": int(total), "uploads_today": calls}
+
+
+def get_failed_images() -> list[dict]:
+    with session_scope() as s:
+        rows = (
+            s.query(ImageRecord)
+            .filter(ImageRecord.processing_status == "failed")
+            .order_by(ImageRecord.upload_date.desc())
+            .all()
+        )
+        return [
+            {
+                "id": img.id,
+                "filename": img.filename,
+                "retailer": img.retailer_name,
+                "uploaded_by": img.uploaded_by or "",
+                "upload_date": img.upload_date.strftime("%d %B %Y %H:%M") if img.upload_date else "",
+                "error_message": img.error_message or "",
+            }
+            for img in rows
+        ]
+
+
+# --- Lightweight user list (no passwords - see AppUser docstring) ---
+
+def get_users() -> list[dict]:
+    with session_scope() as s:
+        rows = s.query(AppUser).order_by(AppUser.name).all()
+        return [{"name": u.name, "is_admin": u.is_admin} for u in rows]
+
+
+def is_admin_user(name: str) -> bool:
+    if not name:
+        return False
+    with session_scope() as s:
+        u = s.get(AppUser, name)
+        return bool(u and u.is_admin)
+
+
+def add_user(name: str, is_admin: bool = False) -> bool:
+    name = (name or "").strip()
+    if not name:
+        return False
+    with session_scope() as s:
+        existing = s.get(AppUser, name)
+        if existing:
+            existing.is_admin = is_admin
+        else:
+            s.add(AppUser(name=name, is_admin=is_admin))
+        return True
+
+
+def remove_user(name: str) -> bool:
+    with session_scope() as s:
+        u = s.get(AppUser, name)
+        if not u:
+            return False
+        s.delete(u)
+        return True

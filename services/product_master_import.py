@@ -10,6 +10,8 @@ EXPECTED_COLS = {
     "category": "category",
     "mrp": "mrp",
     "current stock": "current_stock",
+    "moq": "moq",
+    "minimum order quantity": "moq",
 }
 
 
@@ -26,7 +28,7 @@ def import_product_master(filepath: str) -> dict:
     if "product_alias" not in df.columns:
         raise ValueError(
             "Product master file must have a 'Product Alias' column (Product Name, "
-            "Brand, Category, MRP, Current Stock are optional)."
+            "Brand, Category, MRP, Current Stock, MOQ are optional)."
         )
 
     inserted, updated = 0, 0
@@ -42,6 +44,7 @@ def import_product_master(filepath: str) -> dict:
                 category=str(row.get("category", "") or ""),
                 mrp=float(row["mrp"]) if pd.notna(row.get("mrp")) else None,
                 current_stock=float(row["current_stock"]) if pd.notna(row.get("current_stock")) else None,
+                moq=float(row["moq"]) if pd.notna(row.get("moq")) else None,
             )
             if existing:
                 for k, v in values.items():

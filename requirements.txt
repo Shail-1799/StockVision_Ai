@@ -14,3 +14,4 @@ opencv-python
 opencv-python-headless>=4.10.0
 numpy>=1.26.0
 psycopg2-binary>=2.9.9
+gunicorn>=22.0.0
