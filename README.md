@@ -16,12 +16,12 @@ Excel-style, and you can also type in shortages manually.
 4. Dashboard overhaul — shared chart theme (components/charts.py), OCR-confidence histogram, recurring-shortages table, restyled existing charts.
 5. Side-by-side photo verify	Orders detail + All Records row-select
 6. Bulk retry failed uploads	Orders page, new panel
-7. roq usage tracking	Insights page
+7. Groq usage tracking	Insights page
 8. Undo last edit	All Records
 9. Reorder alerts	Dashboard + Missing Products flag
 10. Retailer reliability report	Insights page
 11. MOQ-aware export	Reports (also fixed: export now actually downloads to your browser instead of just reporting a server path — that was silently broken for anyone not on the same machine as the server)
-12.	Blur/glare pre-check	Before every Groq call
+12.	Blur/glare pre-check before every Groq call
 
 ### Run locally
 
