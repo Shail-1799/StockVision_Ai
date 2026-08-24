@@ -102,13 +102,13 @@ class ProductMaster(Base):
 
 
 class AppUser(Base):
-    """Lightweight, password-free user list - a name picked from a navbar
-    dropdown so uploads/edits can be attributed, plus an admin flag that
-    gates the Insights page. No login, no security boundary - by design,
-    for a small trusted team."""
+    """Real login: a username + hashed password. Admin-managed only - there
+    is no self-service signup or password reset; an admin creates accounts
+    and sets/resets passwords from the Settings page."""
     __tablename__ = "app_users"
 
-    name = Column(String, primary_key=True)
+    name = Column(String, primary_key=True)  # also the login username
+    password_hash = Column(String, nullable=True)  # nullable only for pre-auth legacy rows
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.now)
 

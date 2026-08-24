@@ -45,6 +45,9 @@ _NEW_COLUMNS = {
     "product_master": [
         ("moq", "FLOAT"),
     ],
+    "app_users": [
+        ("password_hash", "VARCHAR"),
+    ],
 }
 
 
@@ -86,11 +89,25 @@ def _seed_default_settings():
 
 
 def _seed_default_users():
-    """First run only - so the app isn't unusable before anyone visits
-    Settings to add real names. Safe to call repeatedly."""
+    """First run only - creates one bootstrap admin login so the app isn't
+    locked out before anyone can sign in to create real accounts. CHANGE
+    THIS PASSWORD IMMEDIATELY after your first login (Settings -> Team).
+    Also backfills a password for any pre-existing passwordless user left
+    over from the old no-login version, so nobody is silently unable to log
+    in after this upgrade - same bootstrap password, same instruction to
+    change it."""
+    from werkzeug.security import generate_password_hash
+
+    bootstrap_hash = generate_password_hash("admin123")
     with session_scope() as s:
         if s.query(AppUser).count() == 0:
-            s.add(AppUser(name="Admin", is_admin=True))
+            s.add(AppUser(name="admin", password_hash=bootstrap_hash, is_admin=True))
+            return
+        # Upgrade path: any user created before passwords existed has
+        # password_hash = NULL and can never log in - give them the same
+        # bootstrap password rather than leaving their account dead.
+        for u in s.query(AppUser).filter(AppUser.password_hash.is_(None)).all():
+            u.password_hash = bootstrap_hash
 
 
 @contextmanager

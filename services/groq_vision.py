@@ -52,6 +52,7 @@ from PIL import Image
 
 import config
 from database.db import get_setting
+from services.image_enhance import MAX_IMAGE_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ retailer name, or an order date that are not actually on the sheet.
 """
 
 MAX_ATTEMPTS = 4
-INITIAL_MAX_DIM = 1400
+INITIAL_MAX_DIM = MAX_IMAGE_DIM  # keep in sync with image_enhance.py's own cap
 INITIAL_MAX_TOKENS = 3000
 
 
@@ -168,10 +169,15 @@ def _encode_image(path: str, max_dim: int, quality: int) -> str:
     img = Image.open(path).convert("RGB")
     if max(img.size) > max_dim:
         ratio = max_dim / max(img.size)
-        img = img.resize((int(img.width * ratio), int(img.height * ratio)))
+        resized = img.resize((int(img.width * ratio), int(img.height * ratio)))
+        img.close()
+        img = resized
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=quality)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    img.close()
+    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+    buf.close()
+    return encoded
 
 
 def _get_client() -> Groq:

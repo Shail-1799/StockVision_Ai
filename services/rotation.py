@@ -23,8 +23,6 @@ line angle in the image. No network call, no tokens, no rate limit.
 import logging
 from pathlib import Path
 
-import cv2
-import numpy as np
 from PIL import Image
 
 import config
@@ -36,14 +34,21 @@ def _opencv_fine_skew(image_path: str) -> float:
     """Estimate small-angle skew (no 90/180/270 correction) from the
     dominant near-horizontal line angle in the image - works well on ruled
     tables even without reading any text."""
+    import cv2  # lazy: only paid for by requests that actually process an image
+    import numpy as np
+
     img = cv2.imread(image_path)
     if img is None:
         return 0.0
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(
-        edges, 1, np.pi / 180, threshold=120, minLineLength=img.shape[1] // 4, maxLineGap=20
-    )
+    try:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=120, minLineLength=img.shape[1] // 4, maxLineGap=20
+        )
+    finally:
+        del img
+
     if lines is None:
         return 0.0
 
@@ -82,9 +87,11 @@ def correct_orientation(image_path: str) -> str:
     # PIL's rotate() is counter-clockwise for positive angles; our estimate
     # is clockwise degrees, so negate.
     rotated = img.rotate(-fine, expand=True, fillcolor=(255, 255, 255), resample=Image.BICUBIC)
+    img.close()
 
     out_path = str(config.PROCESSED_DIR / (Path(image_path).stem + "_deskewed.jpg"))
     rotated.save(out_path, "JPEG", quality=90)
+    rotated.close()
     return out_path
 
 
@@ -96,6 +103,8 @@ def rotate_90_steps(image_path: str, clockwise_degrees: int) -> str:
         return image_path
     img = Image.open(image_path).convert("RGB")
     rotated = img.rotate(-clockwise_degrees, expand=True, fillcolor=(255, 255, 255))
+    img.close()
     out_path = str(config.PROCESSED_DIR / (Path(image_path).stem + f"_rot{clockwise_degrees}.jpg"))
     rotated.save(out_path, "JPEG", quality=90)
+    rotated.close()
     return out_path

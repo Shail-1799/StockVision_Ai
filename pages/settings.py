@@ -7,7 +7,7 @@ import dash_bootstrap_components as dbc
 
 import config
 from database.db import get_setting, set_setting
-from services.aggregator import get_users, add_user, remove_user
+from services.aggregator import get_users, create_or_update_user, remove_user
 
 dash.register_page(__name__, path="/settings", name="Settings")
 
@@ -53,19 +53,28 @@ layout = html.Div(
         dbc.Card(
             dbc.CardBody(
                 [
-                    html.H5("Team (no password - just attribution)"),
+                    html.H5("Team (username + password login)"),
                     html.P(
-                        "Names people pick from the dropdown in the top-right when uploading/editing. "
-                        "Admin-checked names see the Insights page. This is a convenience list, not a "
-                        "login system - anyone can pick any name.",
+                        "Create a login for each person here. Only you (an admin) can set or "
+                        "reset passwords - there's no self-service reset. To change someone's "
+                        "password later, re-enter their username with a new password and click "
+                        "Save; leave the password blank to update just their admin flag.",
                         className="text-muted small",
                     ),
                     html.Div(id="users-table"),
                     dbc.Row(
                         [
-                            dbc.Col(dbc.Input(id="new-user-name-input", placeholder="Name"), md=5),
-                            dbc.Col(dbc.Checklist(id="new-user-admin-check", options=[{"label": "Admin", "value": "admin"}], value=[]), md=3),
-                            dbc.Col(dbc.Button("Add / Update", id="add-user-btn", color="primary", size="sm"), md=4),
+                            dbc.Col(dbc.Input(id="new-user-name-input", placeholder="Username"), md=4),
+                            dbc.Col(
+                                dbc.Input(
+                                    id="new-user-password-input",
+                                    placeholder="Password (blank = keep existing)",
+                                    type="password",
+                                ),
+                                md=4,
+                            ),
+                            dbc.Col(dbc.Checklist(id="new-user-admin-check", options=[{"label": "Admin", "value": "admin"}], value=[]), md=2),
+                            dbc.Col(dbc.Button("Save", id="add-user-btn", color="primary", size="sm"), md=2),
                         ],
                         className="mt-2 g-2 align-items-center",
                     ),
@@ -181,23 +190,28 @@ def render_users_table(_a, _b):
 @callback(
     Output("user-mgmt-result", "children"),
     Output("new-user-name-input", "value"),
+    Output("new-user-password-input", "value"),
     Input("add-user-btn", "n_clicks"),
     Input({"type": "remove-user-btn", "index": dash.ALL}, "n_clicks"),
     State("new-user-name-input", "value"),
+    State("new-user-password-input", "value"),
     State("new-user-admin-check", "value"),
     prevent_initial_call=True,
 )
-def manage_users(add_clicks, remove_clicks, new_name, admin_checked):
+def manage_users(add_clicks, remove_clicks, new_name, new_password, admin_checked):
     triggered = dash.ctx.triggered_id
     if triggered == "add-user-btn":
-        if not (new_name or "").strip():
-            return dbc.Alert("Enter a name first.", color="warning", duration=2000), dash.no_update
-        add_user(new_name.strip(), is_admin="admin" in (admin_checked or []))
-        return dbc.Alert(f"✅ Saved {new_name.strip()}.", color="success", duration=2000), ""
+        ok, msg = create_or_update_user(
+            (new_name or "").strip(),
+            password=(new_password or "").strip(),
+            is_admin="admin" in (admin_checked or []),
+        )
+        color = "success" if ok else "warning"
+        return dbc.Alert(("✅ " if ok else "") + msg, color=color, duration=3000), "", ""
     if isinstance(triggered, dict) and triggered.get("type") == "remove-user-btn":
         remove_user(triggered["index"])
-        return dbc.Alert(f"Removed {triggered['index']}.", color="secondary", duration=2000), dash.no_update
-    return dash.no_update, dash.no_update
+        return dbc.Alert(f"Removed {triggered['index']}.", color="secondary", duration=2000), dash.no_update, dash.no_update
+    return dash.no_update, dash.no_update, dash.no_update
 
 
 @callback(

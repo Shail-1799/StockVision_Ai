@@ -34,6 +34,7 @@ def sha256_of_file(path: str) -> str:
 def dhash(image_path: str) -> str:
     img = Image.open(image_path).convert("L").resize((DHASH_SIZE + 1, DHASH_SIZE))
     pixels = list(img.getdata())
+    img.close()
     width = DHASH_SIZE + 1
     bits = []
     for row in range(DHASH_SIZE):

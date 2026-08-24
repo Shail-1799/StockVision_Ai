@@ -4,13 +4,13 @@ import dash_bootstrap_components as dbc
 import dash_ag_grid as dag
 import plotly.express as px
 import pandas as pd
+from flask import session
 
 from services.aggregator import (
     get_retailer_reliability,
     get_user_activity,
     get_groq_usage_today,
     get_dashboard_stats,
-    is_admin_user,
 )
 from components.charts import style_fig, empty_fig, COLORWAY
 
@@ -21,9 +21,7 @@ layout = html.Div(
         dcc.Interval(id="insights-refresh", interval=10000, n_intervals=0),
         html.H3("Insights", className="mb-1"),
         html.P(
-            "Deeper, team-wide analytics. This nav link is hidden for non-admins, but note this "
-            "is name-based attribution with no login - it's a visibility convenience, not a real "
-            "security boundary.",
+            "Deeper, team-wide analytics, restricted to admin accounts.",
             className="text-muted small",
         ),
         html.Div(id="insights-gate"),
@@ -66,12 +64,12 @@ def _admin_content():
     )
 
 
-@callback(Output("insights-gate", "children"), Input("current-user-store", "data"))
-def gate_insights(current_user):
-    if not is_admin_user(current_user):
+@callback(Output("insights-gate", "children"), Input("insights-refresh", "n_intervals"))
+def gate_insights(_):
+    if not session.get("is_admin"):
         return dbc.Alert(
-            "🔒 Insights is for admins only. Pick your name in the top-right - if you should have "
-            "admin access, ask an admin to grant it on the Settings page.",
+            "🔒 Insights is for admins only. This is enforced server-side against your "
+            "logged-in account, not just hidden in the menu.",
             color="warning",
         )
     return _admin_content()
@@ -115,20 +113,11 @@ def update_retailer_reliability(_):
             {"field": "order_count", "headerName": "Orders", "maxWidth": 100},
             {"field": "shortage_rows", "headerName": "Shortage Rows", "maxWidth": 130},
             {"field": "shortage_qty", "headerName": "Shortage Qty", "maxWidth": 130},
-            {
-                "field": "shortage_rate_pct",
-                "headerName": "Shortage Rate %",
-                "maxWidth": 140,
-            },
+            {"field": "shortage_rate_pct", "headerName": "Shortage Rate %", "maxWidth": 140},
             {"field": "last_order", "headerName": "Last Order"},
         ],
         columnSize="responsiveSizeToFit",
-        defaultColDef={
-            "sortable": True,
-            "filter": True,
-            "floatingFilter": True,
-            "resizable": True,
-        },
+        defaultColDef={"sortable": True, "filter": True, "resizable": True},
         dashGridOptions={"pagination": True, "paginationPageSize": 10},
         style={"height": "340px"},
     )
@@ -149,12 +138,7 @@ def update_user_activity(_):
             {"field": "last_upload", "headerName": "Last Upload"},
         ],
         columnSize="responsiveSizeToFit",
-        defaultColDef={
-            "sortable": True,
-            "filter": True,
-            "floatingFilter": True,
-            "resizable": True,
-        },
+        defaultColDef={"sortable": True, "filter": True, "resizable": True},
         dashGridOptions={"pagination": True, "paginationPageSize": 10},
         style={"height": "340px"},
     )

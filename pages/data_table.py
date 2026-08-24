@@ -73,17 +73,38 @@ layout = html.Div(
         dbc.ButtonGroup(
             [
                 dbc.Button("➕ Add Row", id="data-add-row-btn", color="primary"),
-                dbc.Button("🗑️ Delete Selected", id="data-delete-btn", color="danger", outline=True),
-                dbc.Button("↩️ Undo Last Edit", id="data-undo-btn", color="secondary", outline=True),
+                dbc.Button(
+                    "🗑️ Delete Selected",
+                    id="data-delete-btn",
+                    color="danger",
+                    outline=True,
+                ),
+                dbc.Button(
+                    "↩️ Undo Last Edit",
+                    id="data-undo-btn",
+                    color="secondary",
+                    outline=True,
+                ),
+                dbc.Button(
+                    "🖼️ Show Uploaded Image",
+                    id="show-uploaded-img-btn",
+                    color="warning",
+                ),
+                dbc.Button(
+                    "🖼️ Hide Uploaded Image",
+                    id="hide-uploaded-img-btn",
+                    color="warning",
+                    style={"display": "none"}
+                ),
             ],
             className="mb-3",
         ),
         html.Div(id="data-save-toast"),
         dcc.Store(id="data-refresh-trigger", data=0),
         dcc.Store(id="data-last-edit", data=None),  # {"id", "field", "old_value"}
-        html.Div(id="data-grid-container"),
-        html.Hr(),
         html.Div(id="data-verify-panel"),
+        html.Hr(),
+        html.Div(id="data-grid-container"),
     ]
 )
 
@@ -108,7 +129,7 @@ def render_grid(_):
         id="data-grid",
         rowData=df.sort_values(by="id", ascending=False).to_dict("records"),
         columnDefs=COLUMN_DEFS,
-        defaultColDef={"sortable": True, "filter": True, "floatingFilter": True, "resizable": True},
+        defaultColDef={"sortable": True, "filter": True, "resizable": True},
         columnSize="responsiveSizeToFit",
         dashGridOptions={
             "rowSelection": "multiple",
@@ -175,56 +196,70 @@ def on_add_delete_undo(add_clicks, delete_clicks, undo_clicks, selected_rows, cu
 
 @callback(
     Output("data-verify-panel", "children"),
-    Input("data-grid", "selectedRows"),
+    Output("show-uploaded-img-btn", "style"),
+    Output("hide-uploaded-img-btn", "style"),
+    Input("show-uploaded-img-btn", "n_clicks"),
+    Input("hide-uploaded-img-btn", "n_clicks"),
+    State("data-grid", "selectedRows"),
     prevent_initial_call=True,
 )
-def show_verify_panel(selected_rows):
-    if not selected_rows:
-        return ""
-    row_id = selected_rows[0]["id"]
-    detail = get_missing_product_with_image(row_id)
-    if not detail:
-        return ""
+def show_verify_panel(show, hide, selected_rows):
+    trig_by = ctx.triggered_id  
+    if trig_by == "show-uploaded-img-btn":
+        if not selected_rows:
+            return "", dash.no_update, dash.no_update
 
-    with_image = None
-    from database.db import session_scope
-    from database.models import ImageRecord
+        row_id = selected_rows[0]["id"]
+        detail = get_missing_product_with_image(row_id)
+        if not detail:
+            return "", dash.no_update, dash.no_update
 
-    with session_scope() as s:
-        img = s.get(ImageRecord, detail["image_id"])
-        img_path = (img.display_path or img.filepath) if img else None
+        with_image = None
+        from database.db import session_scope
+        from database.models import ImageRecord
 
-    url = media_url(img_path) if img_path else None
+        with session_scope() as s:
+            img = s.get(ImageRecord, detail["image_id"])
+            img_path = (img.display_path or img.filepath) if img else None
 
-    return dbc.Card(
-        dbc.CardBody(
-            [
-                html.H5(f"Verify: {detail['product_alias']}", className="mb-3"),
-                dbc.Row(
-                    [
-                        dbc.Col(
-                            html.Img(src=url, style={"width": "100%", "borderRadius": "6px"})
-                            if url
-                            else dbc.Alert("No source photo available for this row (manually entered).", color="secondary"),
-                            md=7,
-                        ),
-                        dbc.Col(
-                            [
-                                html.Div([html.B("Retailer: "), detail["retailer"]]),
-                                html.Div([html.B("Order Date: "), detail["order_date"] or "-"]),
-                                html.Div([html.B("Sr No.: "), detail["row_sr_no"] or "-"]),
-                                html.Div([html.B("Qty: "), str(detail["required_quantity"])]),
-                                html.Div([html.B("Raw row text: "), detail["raw_row_text"] or "-"]),
-                                html.Div([html.B("OCR confidence: "), f"{detail['ocr_confidence']:.2f}"]),
-                                html.Div([html.B("Cross confidence: "), f"{detail['cross_confidence']:.2f}"]),
-                                html.Div([html.B("Uploaded by: "), detail["uploaded_by"] or "-"]),
-                            ],
-                            md=5,
-                            className="small",
-                        ),
-                    ]
-                ),
-            ]
-        ),
-        className="shadow-sm",
-    )
+        url = media_url(img_path) if img_path else None
+
+        card = dbc.Card(
+            dbc.CardBody(
+                [
+                    html.H5(f"Verify: {detail['product_alias']}", className="mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                html.Img(src=url, style={"width": "100%", "borderRadius": "6px"})
+                                if url
+                                else dbc.Alert("No source photo available for this row (manually entered).", color="secondary"),
+                                md=7,
+                            ),
+                            dbc.Col(
+                                [
+                                    html.Div([html.B("Retailer: "), detail["retailer"]]),
+                                    html.Div([html.B("Order Date: "), detail["order_date"] or "-"]),
+                                    html.Div([html.B("Sr No.: "), detail["row_sr_no"] or "-"]),
+                                    html.Div([html.B("Qty: "), str(detail["required_quantity"])]),
+                                    html.Div([html.B("Raw row text: "), detail["raw_row_text"] or "-"]),
+                                    html.Div([html.B("OCR confidence: "), f"{detail['ocr_confidence']:.2f}"]),
+                                    html.Div([html.B("Cross confidence: "), f"{detail['cross_confidence']:.2f}"]),
+                                    html.Div([html.B("Uploaded by: "), detail["uploaded_by"] or "-"]),
+                                ],
+                                md=5,
+                                className="small",
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            className="shadow-sm",
+        )
+
+        return card, {"display": "none"}, {}
+    
+    elif trig_by == "hide-uploaded-img-btn":
+        return "", {}, {"display": "none"}
+    else:
+        dash.exceptions.PreventUpdate()

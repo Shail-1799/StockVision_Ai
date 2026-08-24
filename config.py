@@ -79,3 +79,28 @@ AUTO_ROTATE_ENABLED = os.environ.get("AUTO_ROTATE_ENABLED", "true").lower() != "
 # can serialize/stall concurrent uploads. For ~10 concurrent users, set a
 # real DATABASE_URL (Postgres) as above - the app already supports it,
 # nothing else to change.
+
+# --- Auth / sessions ---
+# Signs the login session cookie. MUST be set to a fixed value via the
+# SECRET_KEY env var in production (Render Settings -> Environment) - if
+# left unset, a random key is generated at process start, which works but
+# silently logs everyone out on every deploy/restart since old cookies were
+# signed with a key that no longer exists.
+import secrets as _secrets
+_env_secret = os.environ.get("SECRET_KEY", "").strip()
+if _env_secret:
+    SECRET_KEY = _env_secret
+else:
+    SECRET_KEY = _secrets.token_hex(32)
+    if not IS_SERVERLESS:
+        import logging
+        logging.getLogger(__name__).warning(
+            "SECRET_KEY not set - using a random key for this process. Set a "
+            "fixed SECRET_KEY env var in production or everyone gets logged "
+            "out on every restart/deploy."
+        )
+
+SESSION_LIFETIME_DAYS = 7
+# Cookies only over HTTPS in production; allow plain http for local dev.
+# Render sets RENDER=true on its own, so this needs no manual configuration.
+SESSION_COOKIE_SECURE = bool(os.environ.get("RENDER") or IS_SERVERLESS)

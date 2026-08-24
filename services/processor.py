@@ -2,8 +2,9 @@
 dedup check -> enhance -> quality check -> (pdf split) -> Groq vision
 extraction -> validate -> persist.
 """
+import gc
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database.db import session_scope
 from database.models import ImageRecord, OrderRecord, MissingProduct
@@ -15,6 +16,30 @@ from services.validator import validate_row
 from services.dedup import sha256_of_file, dhash, is_near_duplicate
 
 DEFAULT_RETAILER = "Unknown Retailer"
+# An image stuck in "processing" longer than this was almost certainly
+# abandoned by a crashed/OOM-killed worker mid-request, not genuinely still
+# working (a real extraction takes single-digit seconds). Swept to "failed"
+# on the next process_upload call so it (a) stops being invisible to
+# duplicate detection and (b) shows up in the Orders "Retry" panel instead
+# of silently blocking that image forever.
+STALE_PROCESSING_MINUTES = 10
+
+
+def _sweep_stale_processing():
+    cutoff = datetime.utcnow() - timedelta(minutes=STALE_PROCESSING_MINUTES)
+    with session_scope() as s:
+        stale = (
+            s.query(ImageRecord)
+            .filter(ImageRecord.processing_status == "processing")
+            .filter(ImageRecord.upload_date < cutoff)
+            .all()
+        )
+        for img in stale:
+            img.processing_status = "failed"
+            img.error_message = (
+                "Processing didn't finish (likely a server restart or memory limit "
+                "mid-upload). Use Retry on the Orders page to try again."
+            )
 
 
 def process_upload(filepath: str, retailer_name: str = "", uploaded_by: str = "") -> dict:
@@ -22,6 +47,8 @@ def process_upload(filepath: str, retailer_name: str = "", uploaded_by: str = ""
     typed by the user on the Upload page, if any - leave it blank/None to
     have the retailer auto-extracted from each image instead. `uploaded_by`
     is the name picked in the navbar. Returns a summary dict."""
+    _sweep_stale_processing()
+
     filepath = Path(filepath)
     summary = {"images_created": 0, "rows_found": 0, "errors": [], "duplicates": [], "quality_rejects": []}
 
@@ -47,6 +74,10 @@ def process_upload(filepath: str, retailer_name: str = "", uploaded_by: str = ""
         summary["rows_found"] += result["rows_found"]
         if result["error"]:
             summary["errors"].append(result["error"])
+        # Return large image buffers to the OS between uploads rather than
+        # waiting for Python's GC to get around to it on its own schedule -
+        # matters on Render's 512MB free tier where headroom is tight.
+        gc.collect()
 
     return summary
 
@@ -177,18 +208,29 @@ def _run_extraction(enhanced_path: str, manual_retailer_name: str, image_id: int
         final_retailer = manual_retailer_name or doc["retailer_name"] or DEFAULT_RETAILER
         order_date = doc["order_date"]
 
+        validated_rows = [validate_row(row) for row in doc["rows"]]
+
+        # Everything below is ONE transaction: every row plus the "done"
+        # status flip commit together, or none of them do. This matters a
+        # lot for correctness - a per-row-commit version of this used to let
+        # a mid-loop crash (OOM kill, deploy restart, etc) leave some rows
+        # permanently saved while the image stayed stuck at "processing"
+        # forever. Since duplicate detection only trusts "done" images, that
+        # half-written image was invisible to it - a retry of the same photo
+        # would reprocess from scratch and create a second, duplicate-looking
+        # batch of rows with a fresh timestamp. Atomic commit means an image
+        # is either fully there with all its rows, or not there at all.
         with session_scope() as s:
             img = s.get(ImageRecord, image_id)
             img.retailer_name = final_retailer
             img.display_path = straightened_path
             img.tokens_used = (img.tokens_used or 0) + total_tokens
+
             ordr = s.get(OrderRecord, order_id)
             ordr.retailer_name = final_retailer
             ordr.order_date = order_date
 
-        for row in doc["rows"]:
-            row = validate_row(row)
-            with session_scope() as s:
+            for row in validated_rows:
                 s.add(
                     MissingProduct(
                         order_id=order_id,
@@ -202,10 +244,8 @@ def _run_extraction(enhanced_path: str, manual_retailer_name: str, image_id: int
                         status=row["status"],
                     )
                 )
-            rows_found += 1
+                rows_found += 1
 
-        with session_scope() as s:
-            img = s.get(ImageRecord, image_id)
             img.processing_status = "done"
 
     except GroqVisionError as e:

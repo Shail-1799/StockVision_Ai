@@ -513,7 +513,7 @@ def get_failed_images() -> list[dict]:
         ]
 
 
-# --- Lightweight user list (no passwords - see AppUser docstring) ---
+# --- Login / user management (admin-managed accounts, real passwords) ---
 
 def get_users() -> list[dict]:
     with session_scope() as s:
@@ -529,17 +529,44 @@ def is_admin_user(name: str) -> bool:
         return bool(u and u.is_admin)
 
 
-def add_user(name: str, is_admin: bool = False) -> bool:
+def verify_login(username: str, password: str) -> dict | None:
+    """Checks username/password against the stored hash. Returns
+    {"name":..., "is_admin":...} on success, None on any failure (unknown
+    user, wrong password, or an account with no password set yet)."""
+    from werkzeug.security import check_password_hash
+
+    username = (username or "").strip()
+    if not username or not password:
+        return None
+    with session_scope() as s:
+        u = s.get(AppUser, username)
+        if not u or not u.password_hash:
+            return None
+        if not check_password_hash(u.password_hash, password):
+            return None
+        return {"name": u.name, "is_admin": u.is_admin}
+
+
+def create_or_update_user(name: str, password: str = "", is_admin: bool = False) -> tuple[bool, str]:
+    """Admin-only account creation/edit. `password` is required for a new
+    user; for an EXISTING user, leave it blank to keep their current
+    password and only change the admin flag. Returns (ok, message)."""
+    from werkzeug.security import generate_password_hash
+
     name = (name or "").strip()
     if not name:
-        return False
+        return False, "Enter a name first."
     with session_scope() as s:
         existing = s.get(AppUser, name)
         if existing:
             existing.is_admin = is_admin
-        else:
-            s.add(AppUser(name=name, is_admin=is_admin))
-        return True
+            if password:
+                existing.password_hash = generate_password_hash(password)
+            return True, f"Updated {name}."
+        if not password:
+            return False, f"{name} is a new user - set a password for them."
+        s.add(AppUser(name=name, password_hash=generate_password_hash(password), is_admin=is_admin))
+        return True, f"Created {name}."
 
 
 def remove_user(name: str) -> bool:

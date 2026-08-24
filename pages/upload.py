@@ -4,6 +4,7 @@ import datetime as dt
 import dash
 from dash import html, dcc, callback, Output, Input, State, ctx
 import dash_bootstrap_components as dbc
+from flask import session
 
 import config
 from services.processor import process_upload
@@ -88,7 +89,6 @@ layout = html.Div(
         dcc.Store(id="upload-queue", data=[]),
         dcc.Store(id="upload-total", data=0),
         dcc.Store(id="upload-results", data=[]),
-        dcc.Interval(id="upload-tick", interval=400, disabled=True, n_intervals=0),
         html.Div(id="upload-progress-text", className="text-muted small mb-2"),
         dbc.Progress(id="upload-progress-bar", value=0, className="mb-3", style={"height": "6px"}, animated=True, striped=True),
         html.Div(id="upload-results-display"),
@@ -114,7 +114,6 @@ def _queue_items(contents_list, filenames_list):
     Output("upload-queue", "data", allow_duplicate=True),
     Output("upload-total", "data", allow_duplicate=True),
     Output("upload-results", "data", allow_duplicate=True),
-    Output("upload-tick", "disabled", allow_duplicate=True),
     Input("upload-camera", "contents"),
     State("upload-camera", "filename"),
     State("upload-queue", "data"),
@@ -122,17 +121,16 @@ def _queue_items(contents_list, filenames_list):
 )
 def stage_camera_upload(contents, filename, existing_queue):
     if not contents:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     new_items = _queue_items([contents], [filename])
     queue = (existing_queue or []) + new_items
-    return queue, len(queue), [], False
+    return queue, len(queue), []
 
 
 @callback(
     Output("upload-queue", "data", allow_duplicate=True),
     Output("upload-total", "data", allow_duplicate=True),
     Output("upload-results", "data", allow_duplicate=True),
-    Output("upload-tick", "disabled", allow_duplicate=True),
     Input("upload-files", "contents"),
     State("upload-files", "filename"),
     State("upload-queue", "data"),
@@ -140,10 +138,10 @@ def stage_camera_upload(contents, filename, existing_queue):
 )
 def stage_gallery_upload(list_of_contents, list_of_filenames, existing_queue):
     if not list_of_contents:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     new_items = _queue_items(list_of_contents, list_of_filenames)
     queue = (existing_queue or []) + new_items
-    return queue, len(queue), [], False
+    return queue, len(queue), []
 
 
 def _result_to_alert(result: dict):
@@ -176,24 +174,29 @@ def _result_to_alert(result: dict):
     Output("upload-results", "data", allow_duplicate=True),
     Output("upload-progress-text", "children"),
     Output("upload-progress-bar", "value"),
-    Output("upload-tick", "disabled", allow_duplicate=True),
-    Input("upload-tick", "n_intervals"),
-    State("upload-queue", "data"),
+    Input("upload-queue", "data"),
     State("upload-results", "data"),
     State("upload-total", "data"),
     State("retailer-name-input", "value"),
-    State("current-user-store", "data"),
     prevent_initial_call=True,
 )
-def process_next_in_queue(_, queue, results, total, retailer_name, current_user):
+def process_next_in_queue(queue, results, total, retailer_name):
+    # Self-chaining on purpose: this callback's own Input is the Store it
+    # writes to. Writing a shorter queue is what triggers the NEXT run - not
+    # a fixed timer - so there is never more than one of these in flight at
+    # once, no matter how long a single image's Groq call takes. (A fixed
+    # dcc.Interval here used to fire every 400ms regardless of whether the
+    # previous run had finished, piling up overlapping requests behind a
+    # slow extraction call and leaving the page stuck on "Updating...".)
     queue = queue or []
     results = results or []
     if not queue:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, True
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     item = queue[0]
     remaining = queue[1:]
     filename = item["filename"]
+    current_user = session.get("username", "")
 
     try:
         _, content_string = item["content"].split(",", 1)
@@ -201,7 +204,7 @@ def process_next_in_queue(_, queue, results, total, retailer_name, current_user)
         summary = process_upload(
             saved_path,
             retailer_name=(retailer_name or "").strip(),
-            uploaded_by=(current_user or "").strip(),
+            uploaded_by=current_user,
         )
         if summary["duplicates"]:
             for dup in summary["duplicates"]:
@@ -228,7 +231,7 @@ def process_next_in_queue(_, queue, results, total, retailer_name, current_user)
     done_count = total - len(remaining)
     progress_text = f"Processing {done_count} of {total}..." if remaining else f"Done - {total} file(s) processed."
     progress_val = int((done_count / total) * 100) if total else 100
-    return remaining, results, progress_text, progress_val, len(remaining) == 0
+    return remaining, results, progress_text, progress_val
 
 
 @callback(
