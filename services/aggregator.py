@@ -2,7 +2,13 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from database.db import session_scope, get_setting
-from database.models import MissingProduct, ImageRecord, OrderRecord, AppUser, ProductMaster
+from database.models import (
+    MissingProduct,
+    ImageRecord,
+    OrderRecord,
+    AppUser,
+    ProductMaster,
+)
 
 EDITABLE_FIELDS = {
     "product_alias",
@@ -42,7 +48,9 @@ def get_all_missing_products() -> list[dict]:
                 "row_sr_no": mp.row_sr_no,
                 "order_id": o.order_label or "",
                 "order_date": o.order_date or "",
-                "created_at": mp.created_at.strftime("%d %B %Y %H:%M:%S") if mp.created_at else "",
+                "created_at": (
+                    mp.created_at.strftime("%d %B %Y %H:%M:%S") if mp.created_at else ""
+                ),
             }
             for mp, o, img in rows
         ]
@@ -159,7 +167,9 @@ def get_or_create_manual_source() -> tuple[int, int]:
         return img.id, order.id
 
 
-def add_manual_row(product_alias: str = "NEW-ITEM", required_quantity: float = 0) -> int:
+def add_manual_row(
+    product_alias: str = "NEW-ITEM", required_quantity: float = 0
+) -> int:
     """Adds a blank/default editable row a user can then fill in like Excel."""
     image_id, order_id = get_or_create_manual_source()
     with session_scope() as s:
@@ -199,7 +209,10 @@ def get_aggregated_products(status="accepted") -> list[dict]:
             last_retailer = (
                 s.query(OrderRecord.retailer_name)
                 .join(MissingProduct, MissingProduct.order_id == OrderRecord.id)
-                .filter(MissingProduct.product_alias == alias, MissingProduct.status == status)
+                .filter(
+                    MissingProduct.product_alias == alias,
+                    MissingProduct.status == status,
+                )
                 .order_by(MissingProduct.created_at.desc())
                 .first()
             )
@@ -210,7 +223,9 @@ def get_aggregated_products(status="accepted") -> list[dict]:
                     "times_missing": times_missing,
                     "last_seen": last_seen,
                     "last_retailer": last_retailer[0] if last_retailer else "",
-                    "recurring": "🔥 Recurring" if times_missing >= reorder_min_times else "",
+                    "recurring": (
+                        "🔥 Recurring" if times_missing >= reorder_min_times else ""
+                    ),
                 }
             )
         return results
@@ -262,7 +277,9 @@ def get_review_queue() -> list[dict]:
         ]
 
 
-def review_action(row_id: int, action: str, edited_alias: str = None, edited_qty: float = None):
+def review_action(
+    row_id: int, action: str, edited_alias: str = None, edited_qty: float = None
+):
     """action: 'accept' | 'edit' | 'reject'"""
     with session_scope() as s:
         row = s.get(MissingProduct, row_id)
@@ -437,7 +454,9 @@ def get_retailer_reliability() -> list[dict]:
                 "order_count": order_count,
                 "shortage_rows": shortage_rows,
                 "shortage_qty": round(shortage_qty.get(retailer, 0) or 0, 2),
-                "shortage_rate_pct": round((shortage_rows / order_count) * 100, 1) if order_count else 0,
+                "shortage_rate_pct": (
+                    round((shortage_rows / order_count) * 100, 1) if order_count else 0
+                ),
                 "last_order": last_order.strftime("%d %B %Y") if last_order else "",
             }
         )
@@ -466,7 +485,9 @@ def get_user_activity() -> list[dict]:
                 "uploaded_by": r.uploaded_by,
                 "uploads": r.uploads,
                 "tokens_used": r.tokens or 0,
-                "last_upload": r.last_upload.strftime("%d %B %Y %H:%M") if r.last_upload else "",
+                "last_upload": (
+                    r.last_upload.strftime("%d %B %Y %H:%M") if r.last_upload else ""
+                ),
             }
             for r in rows
         ]
@@ -506,7 +527,11 @@ def get_failed_images() -> list[dict]:
                 "filename": img.filename,
                 "retailer": img.retailer_name,
                 "uploaded_by": img.uploaded_by or "",
-                "upload_date": img.upload_date.strftime("%d %B %Y %H:%M") if img.upload_date else "",
+                "upload_date": (
+                    img.upload_date.strftime("%d %B %Y %H:%M")
+                    if img.upload_date
+                    else ""
+                ),
                 "error_message": img.error_message or "",
             }
             for img in rows
@@ -514,6 +539,7 @@ def get_failed_images() -> list[dict]:
 
 
 # --- Login / user management (admin-managed accounts, real passwords) ---
+
 
 def get_users() -> list[dict]:
     with session_scope() as s:
@@ -531,15 +557,24 @@ def is_admin_user(name: str) -> bool:
 
 def verify_login(username: str, password: str) -> dict | None:
     """Checks username/password against the stored hash. Returns
-    {"name":..., "is_admin":...} on success, None on any failure (unknown
-    user, wrong password, or an account with no password set yet)."""
+    {"name":..., "is_admin":...} on success (using the account's actual
+    stored casing, regardless of how the person typed it), None on any
+    failure (unknown user, wrong password, or an account with no password
+    set yet). Case-insensitive on purpose - "Admin" and "admin" are the
+    same login as far as a human typing it is concerned, even though the
+    underlying name column is case-sensitive for exact-match admin actions
+    elsewhere (editing/removing a specific row in Settings)."""
     from werkzeug.security import check_password_hash
 
     username = (username or "").strip()
     if not username or not password:
         return None
     with session_scope() as s:
-        u = s.get(AppUser, username)
+        u = (
+            s.query(AppUser)
+            .filter(func.lower(AppUser.name) == username.lower())
+            .first()
+        )
         if not u or not u.password_hash:
             return None
         if not check_password_hash(u.password_hash, password):
@@ -547,7 +582,9 @@ def verify_login(username: str, password: str) -> dict | None:
         return {"name": u.name, "is_admin": u.is_admin}
 
 
-def create_or_update_user(name: str, password: str = "", is_admin: bool = False) -> tuple[bool, str]:
+def create_or_update_user(
+    name: str, password: str = "", is_admin: bool = False
+) -> tuple[bool, str]:
     """Admin-only account creation/edit. `password` is required for a new
     user; for an EXISTING user, leave it blank to keep their current
     password and only change the admin flag. Returns (ok, message)."""
@@ -558,6 +595,20 @@ def create_or_update_user(name: str, password: str = "", is_admin: bool = False)
         return False, "Enter a name first."
     with session_scope() as s:
         existing = s.get(AppUser, name)
+        if not existing:
+            # Case-insensitive collision check - never allow e.g. "Admin" and
+            # "admin" to exist side by side as two confusingly-similar
+            # accounts (this is exactly what caused a login mismatch before).
+            collision = (
+                s.query(AppUser)
+                .filter(func.lower(AppUser.name) == name.lower())
+                .first()
+            )
+            if collision:
+                return (
+                    False,
+                    f'A user named "{collision.name}" already exists (names are case-insensitive) - edit that one instead.',
+                )
         if existing:
             existing.is_admin = is_admin
             if password:
@@ -565,7 +616,13 @@ def create_or_update_user(name: str, password: str = "", is_admin: bool = False)
             return True, f"Updated {name}."
         if not password:
             return False, f"{name} is a new user - set a password for them."
-        s.add(AppUser(name=name, password_hash=generate_password_hash(password), is_admin=is_admin))
+        s.add(
+            AppUser(
+                name=name,
+                password_hash=generate_password_hash(password),
+                is_admin=is_admin,
+            )
+        )
         return True, f"Created {name}."
 
 
