@@ -3,6 +3,7 @@ StockVision AI - central configuration.
 Reads from .env if present, falls back to sane local-first defaults.
 Nothing here requires internet access except the Groq API call itself.
 """
+
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -87,6 +88,7 @@ AUTO_ROTATE_ENABLED = os.environ.get("AUTO_ROTATE_ENABLED", "true").lower() != "
 # silently logs everyone out on every deploy/restart since old cookies were
 # signed with a key that no longer exists.
 import secrets as _secrets
+
 _env_secret = os.environ.get("SECRET_KEY", "").strip()
 if _env_secret:
     SECRET_KEY = _env_secret
@@ -94,6 +96,7 @@ else:
     SECRET_KEY = _secrets.token_hex(32)
     if not IS_SERVERLESS:
         import logging
+
         logging.getLogger(__name__).warning(
             "SECRET_KEY not set - using a random key for this process. Set a "
             "fixed SECRET_KEY env var in production or everyone gets logged "
@@ -104,3 +107,15 @@ SESSION_LIFETIME_DAYS = 7
 # Cookies only over HTTPS in production; allow plain http for local dev.
 # Render sets RENDER=true on its own, so this needs no manual configuration.
 SESSION_COOKIE_SECURE = bool(os.environ.get("RENDER") or IS_SERVERLESS)
+
+# --- Deterministic admin recovery (set these on Render, not committed here) ---
+# If BOTH are set, db.py force-creates/overwrites this exact account with
+# this exact password on every single boot - not a one-time seed that can
+# silently no-op depending on whatever state already happens to be sitting
+# in the database. This is the guaranteed way in: whatever's currently in
+# app_users (leftover accounts from earlier versions, wrong casing, a
+# password that never got backfilled correctly, anything), setting these two
+# env vars on Render and redeploying WILL get you in with exactly these
+# credentials, no guessing about DB history required.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()

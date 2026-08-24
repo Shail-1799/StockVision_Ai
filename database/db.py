@@ -12,7 +12,9 @@ from database.models import Base, AppSetting, AppUser
 _is_sqlite = config.DATABASE_URL.startswith("sqlite")
 
 if _is_sqlite:
-    engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        config.DATABASE_URL, connect_args={"check_same_thread": False}
+    )
 else:
     engine = create_engine(
         config.DATABASE_URL,
@@ -25,7 +27,9 @@ else:
         # idle/max-lifetime limits close them out from under us.
         pool_recycle=300,
     )
-SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
+SessionLocal = scoped_session(
+    sessionmaker(bind=engine, autoflush=False, autocommit=False)
+)
 
 # Columns added after the initial release. create_all() only creates missing
 # TABLES, not missing columns on tables that already exist, so any existing
@@ -61,7 +65,9 @@ def _run_light_migrations():
             existing_cols = {c["name"] for c in inspector.get_columns(table)}
             for col_name, col_type in columns:
                 if col_name not in existing_cols:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"))
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    )
 
 
 def init_db():
@@ -69,6 +75,8 @@ def init_db():
     _run_light_migrations()
     _seed_default_settings()
     _seed_default_users()
+    _apply_admin_override()
+    _log_current_users()
 
 
 def _seed_default_settings():
@@ -108,6 +116,58 @@ def _seed_default_users():
         # bootstrap password rather than leaving their account dead.
         for u in s.query(AppUser).filter(AppUser.password_hash.is_(None)).all():
             u.password_hash = bootstrap_hash
+
+
+def _apply_admin_override():
+    """Deterministic, every-boot admin recovery lever - see config.py for
+    why this exists. A no-op unless ADMIN_USERNAME and ADMIN_PASSWORD are
+    both set as Render env vars. When they are, this force-creates or
+    force-overwrites that exact account's password + admin flag on every
+    single startup, regardless of whatever else is already sitting in
+    app_users. This is the guaranteed unblock path - it does not depend on
+    interpreting prior seed/backfill state."""
+    if not (config.ADMIN_USERNAME and config.ADMIN_PASSWORD):
+        return
+    from werkzeug.security import generate_password_hash
+    from sqlalchemy import func
+
+    with session_scope() as s:
+        # Case-insensitive: reuse an existing similarly-cased row rather than
+        # creating a second confusing near-duplicate account.
+        existing = (
+            s.query(AppUser)
+            .filter(func.lower(AppUser.name) == config.ADMIN_USERNAME.lower())
+            .first()
+        )
+        new_hash = generate_password_hash(config.ADMIN_PASSWORD)
+        if existing:
+            existing.name = (
+                config.ADMIN_USERNAME
+            )  # normalize to the exact casing you set
+            existing.password_hash = new_hash
+            existing.is_admin = True
+        else:
+            s.add(
+                AppUser(
+                    name=config.ADMIN_USERNAME, password_hash=new_hash, is_admin=True
+                )
+            )
+
+
+def _log_current_users():
+    """Logs the (non-secret) list of usernames currently in the database at
+    every boot - so "why can't I log in" is something you can check in
+    Render's logs instead of something we have to guess about together."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    with session_scope() as s:
+        users = s.query(AppUser.name, AppUser.is_admin, AppUser.password_hash).all()
+    summary = [
+        f"{name}{' (admin)' if is_admin else ''}{' [NO PASSWORD SET]' if not pw else ''}"
+        for name, is_admin, pw in users
+    ]
+    logger.warning("app_users in this database right now: %s", summary or "(none)")
 
 
 @contextmanager
