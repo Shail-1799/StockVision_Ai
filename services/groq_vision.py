@@ -152,7 +152,7 @@ If there are no X-marked rows, return an empty "rows" list. Never invent rows, a
 retailer name, or an order date that are not actually on the sheet.
 """
 
-MAX_ATTEMPTS = 4
+MAX_ATTEMPTS = 3
 INITIAL_MAX_DIM = MAX_IMAGE_DIM  # keep in sync with image_enhance.py's own cap
 INITIAL_MAX_TOKENS = 3000
 
@@ -260,7 +260,7 @@ def _call_with_retry(client: Groq, model: str, image_path: str, prompt_text: str
                     retry_after = float(e.response.headers.get("retry-after", ""))
                 except Exception:
                     pass
-                wait = retry_after if retry_after else min(2 ** attempt, 20)
+                wait = retry_after if retry_after else min(2 ** attempt, 8)
                 logger.warning(
                     "Groq rate limited (attempt %d/%d) - waiting %.1fs", attempt, MAX_ATTEMPTS, wait
                 )

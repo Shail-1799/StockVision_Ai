@@ -109,24 +109,37 @@ def render_failed_panel(_):
     prevent_initial_call=True,
 )
 def handle_retry(all_clicks, single_clicks, current_n):
+    # retry_failed_image() now queues the retry in a background thread and
+    # returns immediately (same reasoning as pages/upload.py: never make an
+    # HTTP request wait on a slow Groq call). The existing orders-refresh
+    # Interval below already re-queries live DB state every few seconds, so
+    # it naturally picks up the real outcome once the background retry
+    # finishes - no separate polling needed here.
     triggered = dash.ctx.triggered_id
     if triggered == "retry-all-failed-btn":
         failed = get_failed_images()
-        ok_count = 0
+        queued_count = 0
         for f in failed:
             result = retry_failed_image(f["id"])
             if not result.get("error"):
-                ok_count += 1
+                queued_count += 1
         return (
-            dbc.Alert(f"Retried {len(failed)} - {ok_count} succeeded, {len(failed) - ok_count} still failed.", color="info"),
+            dbc.Alert(
+                f"Queued {queued_count} of {len(failed)} for retry - check back in a few "
+                f"seconds, this panel updates automatically.",
+                color="info",
+            ),
             (current_n or 0) + 1,
         )
     if isinstance(triggered, dict) and triggered.get("type") == "retry-single":
         image_id = triggered["index"]
         result = retry_failed_image(image_id)
         if result.get("error"):
-            return dbc.Alert(f"Still failing: {result['error']}", color="danger", duration=4000), (current_n or 0) + 1
-        return dbc.Alert(f"✅ Recovered - {result['rows_found']} row(s) found.", color="success", duration=3000), (current_n or 0) + 1
+            return dbc.Alert(f"Could not retry: {result['error']}", color="danger", duration=4000), (current_n or 0) + 1
+        return (
+            dbc.Alert("⏳ Queued for retry - this panel will update automatically once it finishes.", color="info", duration=4000),
+            (current_n or 0) + 1,
+        )
     return dash.no_update, dash.no_update
 
 

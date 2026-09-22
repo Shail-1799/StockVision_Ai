@@ -1,8 +1,34 @@
 """Orchestrates the full pipeline for one uploaded file:
 dedup check -> enhance -> quality check -> (pdf split) -> Groq vision
 extraction -> validate -> persist.
+
+--- Why extraction runs in a background thread ---
+The Groq call chain (extraction, sometimes a second call for a rotated
+photo, sometimes rate-limit retries with backoff) can take anywhere from a
+couple seconds to over a minute in a bad case. Running that INSIDE the HTTP
+request the browser is waiting on means the request's total duration is
+however long Groq happens to take that time - and on a small hosting tier,
+that can exceed the platform's own reverse-proxy timeout (which no amount
+of gunicorn --timeout tuning can override), surfacing as a 502 the user
+never gets an explanation for. It's also the reason mobile uploads could
+look like "nothing happens": the browser is just waiting on a slow request,
+often over a slower connection than a desk.
+
+So the split here is deliberate: process_upload() does only the FAST, local
+work synchronously (dedup hash check, blur check, DB record creation - all
+comfortably sub-second even on a fraction of a CPU core) and hands the slow
+part to a small bounded thread pool, returning to the caller almost
+immediately with a "queued" status instead of the final result. The Upload
+page polls image_id statuses afterward (see pages/upload.py) instead of
+waiting on the original request.
+
+SQLAlchemy's scoped_session (see database/db.py) is keyed by thread ID by
+default, so each background thread automatically gets its own DB session -
+no special handling needed for that here.
 """
 import gc
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -15,14 +41,23 @@ from services.groq_vision import extract_document, GroqVisionError
 from services.validator import validate_row
 from services.dedup import sha256_of_file, dhash, is_near_duplicate
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_RETAILER = "Unknown Retailer"
 # An image stuck in "processing" longer than this was almost certainly
 # abandoned by a crashed/OOM-killed worker mid-request, not genuinely still
-# working (a real extraction takes single-digit seconds). Swept to "failed"
-# on the next process_upload call so it (a) stops being invisible to
-# duplicate detection and (b) shows up in the Orders "Retry" panel instead
-# of silently blocking that image forever.
+# working. Swept to "failed" on the next process_upload call so it (a) stops
+# being invisible to duplicate detection and (b) shows up in the Orders
+# "Retry" panel instead of silently blocking that image forever.
 STALE_PROCESSING_MINUTES = 10
+
+# Bounded concurrency for the slow part (Groq calls). Deliberately small -
+# this is a single 512MB/0.1-vCPU instance; a handful of photos uploaded at
+# once should queue behind each other rather than all fight for the same
+# thin CPU slice simultaneously, which would just make every one of them
+# slower. Two lets one person's retry not block behind someone else's whole
+# batch, without over-committing the box.
+_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="extraction")
 
 
 def _sweep_stale_processing():
@@ -43,22 +78,32 @@ def _sweep_stale_processing():
 
 
 def process_upload(filepath: str, retailer_name: str = "", uploaded_by: str = "") -> dict:
-    """Handles a single uploaded image OR pdf. `retailer_name` is the value
-    typed by the user on the Upload page, if any - leave it blank/None to
-    have the retailer auto-extracted from each image instead. `uploaded_by`
-    is the name picked in the navbar. Returns a summary dict."""
+    """Handles a single uploaded image OR pdf. Returns FAST (no waiting on
+    Groq) - image_id's for anything that passed the local checks are queued
+    for background extraction; poll them with get_image_status(). `duplicates`
+    and `quality_rejects` are resolved immediately since those checks are
+    local and instant."""
     _sweep_stale_processing()
 
     filepath = Path(filepath)
-    summary = {"images_created": 0, "rows_found": 0, "errors": [], "duplicates": [], "quality_rejects": []}
+    summary = {
+        "queued": [],  # [{"image_id":..., "filename":...}] - still processing, poll for outcome
+        "duplicates": [],
+        "quality_rejects": [],
+        "errors": [],  # immediate failures (e.g. a corrupt/unreadable file) - resolved synchronously
+    }
 
-    if filepath.suffix.lower() == ".pdf":
-        page_paths = pdf_to_images(str(filepath))
-    else:
-        page_paths = [str(filepath)]
+    try:
+        if filepath.suffix.lower() == ".pdf":
+            page_paths = pdf_to_images(str(filepath))
+        else:
+            page_paths = [str(filepath)]
+    except Exception as e:
+        summary["errors"].append(f"Could not read this file: {e}")
+        return summary
 
     for page_path in page_paths:
-        result = _process_single_image(
+        result = _prepare_image(
             page_path,
             (retailer_name or "").strip(),
             original_name=filepath.name,
@@ -66,17 +111,12 @@ def process_upload(filepath: str, retailer_name: str = "", uploaded_by: str = ""
         )
         if result.get("duplicate"):
             summary["duplicates"].append(result["duplicate"])
-            continue
-        if result.get("quality_reject"):
+        elif result.get("quality_reject"):
             summary["quality_rejects"].append(result["error"])
-            continue
-        summary["images_created"] += 1
-        summary["rows_found"] += result["rows_found"]
-        if result["error"]:
+        elif result.get("error"):
             summary["errors"].append(result["error"])
-        # Return large image buffers to the OS between uploads rather than
-        # waiting for Python's GC to get around to it on its own schedule -
-        # matters on Render's 512MB free tier where headroom is tight.
+        else:
+            summary["queued"].append({"image_id": result["image_id"], "filename": filepath.name})
         gc.collect()
 
     return summary
@@ -136,20 +176,24 @@ def _find_duplicate(original_path: str, enhanced_path: str):
     return None, content_hash, incoming_phash
 
 
-def _process_single_image(image_path: str, manual_retailer_name: str, original_name: str, uploaded_by: str) -> dict:
-    # Local, free checks BEFORE any DB rows are created and BEFORE any Groq
-    # call is spent: duplicate detection, then image quality.
-    enhanced_path = enhance_image(image_path)
+def _prepare_image(image_path: str, manual_retailer_name: str, original_name: str, uploaded_by: str) -> dict:
+    """The FAST synchronous part: local checks + record creation. On
+    success, submits the slow extraction to the background thread pool and
+    returns immediately with the new image_id - it does NOT wait for
+    extraction to finish."""
+    try:
+        enhanced_path = enhance_image(image_path)
+    except Exception as e:
+        return {"error": f"Could not read this image: {e}"}
 
     duplicate, content_hash, incoming_phash = _find_duplicate(image_path, enhanced_path)
     if duplicate:
-        return {"rows_found": 0, "error": None, "duplicate": duplicate}
+        return {"duplicate": duplicate}
 
     is_blurry, blur_msg, _score = check_image_quality(enhanced_path)
     if is_blurry:
-        return {"rows_found": 0, "error": blur_msg, "duplicate": None, "quality_reject": True}
+        return {"quality_reject": True, "error": blur_msg}
 
-    # Placeholder retailer until extraction runs (or the manual override if given).
     placeholder_retailer = manual_retailer_name or DEFAULT_RETAILER
 
     with session_scope() as s:
@@ -165,18 +209,36 @@ def _process_single_image(image_path: str, manual_retailer_name: str, original_n
             phash=incoming_phash,
         )
         s.add(image)
-        s.flush()  # get image.id
+        s.flush()
 
         order = OrderRecord(image_id=image.id, retailer_name=placeholder_retailer)
         s.add(order)
         s.flush()
         image_id, order_id = image.id, order.id
-        # Default Order ID label = the order's own numeric id, so every row
-        # extracted from this image shares the same label out of the box.
         order.order_label = str(order.id)
 
-    result = _run_extraction(enhanced_path, manual_retailer_name, image_id, order_id)
-    return result
+    _EXECUTOR.submit(_run_extraction_safe, enhanced_path, manual_retailer_name, image_id, order_id)
+    return {"image_id": image_id}
+
+
+def _run_extraction_safe(enhanced_path: str, manual_retailer_name: str, image_id: int, order_id: int):
+    """Thread-pool entry point - _run_extraction already catches everything
+    it knows about, but a background thread that raises is otherwise
+    invisible (no request to show a traceback in), so this is a hard
+    backstop that guarantees the image never gets stuck at "processing"
+    even if something truly unexpected happens."""
+    try:
+        _run_extraction(enhanced_path, manual_retailer_name, image_id, order_id)
+    except Exception as e:
+        logger.exception("Background extraction crashed for image_id=%s", image_id)
+        try:
+            with session_scope() as s:
+                img = s.get(ImageRecord, image_id)
+                if img and img.processing_status == "processing":
+                    img.processing_status = "failed"
+                    img.error_message = f"Unexpected background error: {e}"
+        except Exception:
+            pass
 
 
 def _run_extraction(enhanced_path: str, manual_retailer_name: str, image_id: int, order_id: int) -> dict:
@@ -194,32 +256,20 @@ def _run_extraction(enhanced_path: str, manual_retailer_name: str, image_id: int
         # Rare case: EXIF didn't fix it and the sheet was genuinely
         # photographed sideways/upside-down. The model told us so on the
         # same call - rotate locally (free) and read it again properly.
-        # This only fires occasionally, so it doesn't affect the typical
-        # per-image request budget.
         if doc["rotate_clockwise_degrees"]:
             rotated_path = rotate_90_steps(straightened_path, doc["rotate_clockwise_degrees"])
             doc = extract_document(rotated_path)
             total_tokens += doc.get("tokens_used", 0)
             straightened_path = rotated_path
 
-        # Retailer: the manual field on the Upload page is an override - if
-        # the user left it blank, use whatever the vision model read off the
-        # sheet itself, falling back to "Unknown Retailer" if neither is set.
         final_retailer = manual_retailer_name or doc["retailer_name"] or DEFAULT_RETAILER
         order_date = doc["order_date"]
 
         validated_rows = [validate_row(row) for row in doc["rows"]]
 
         # Everything below is ONE transaction: every row plus the "done"
-        # status flip commit together, or none of them do. This matters a
-        # lot for correctness - a per-row-commit version of this used to let
-        # a mid-loop crash (OOM kill, deploy restart, etc) leave some rows
-        # permanently saved while the image stayed stuck at "processing"
-        # forever. Since duplicate detection only trusts "done" images, that
-        # half-written image was invisible to it - a retry of the same photo
-        # would reprocess from scratch and create a second, duplicate-looking
-        # batch of rows with a fresh timestamp. Atomic commit means an image
-        # is either fully there with all its rows, or not there at all.
+        # status flip commit together, or none of them do - a crash mid-loop
+        # (OOM, restart) never leaves a half-written, dedup-invisible image.
         with session_scope() as s:
             img = s.get(ImageRecord, image_id)
             img.retailer_name = final_retailer
@@ -260,25 +310,50 @@ def _run_extraction(enhanced_path: str, manual_retailer_name: str, image_id: int
             img = s.get(ImageRecord, image_id)
             img.processing_status = "failed"
             img.error_message = error
+    finally:
+        gc.collect()
 
     return {"rows_found": rows_found, "error": error, "duplicate": None}
+
+
+def get_image_status(image_id: int) -> dict | None:
+    """Used by the Upload page's poller. Returns None if the image_id is
+    somehow gone; otherwise the current status plus enough info to render a
+    result once it's done/failed."""
+    with session_scope() as s:
+        img = s.get(ImageRecord, image_id)
+        if not img:
+            return None
+        rows_found = 0
+        if img.processing_status == "done":
+            rows_found = (
+                s.query(MissingProduct).filter(MissingProduct.image_id == image_id).count()
+            )
+        return {
+            "image_id": image_id,
+            "status": img.processing_status,  # "processing" | "done" | "failed"
+            "filename": img.filename,
+            "rows_found": rows_found,
+            "error_message": img.error_message or "",
+        }
 
 
 def retry_failed_image(image_id: int) -> dict:
     """Re-runs extraction on an image that previously failed, reusing its
     already-saved file (no re-upload needed). Clears any partial rows left
-    over from the failed attempt first."""
+    over from the failed attempt first. Also runs in the background thread
+    pool and returns immediately - see module docstring."""
     with session_scope() as s:
         img = s.get(ImageRecord, image_id)
         if not img:
-            return {"error": "Image not found", "rows_found": 0}
-        enhanced_path = img.display_path or img.filepath
+            return {"error": "Image not found"}
         manual_retailer = "" if img.retailer_name in ("", DEFAULT_RETAILER) else img.retailer_name
+        source_path = img.filepath
         order = s.query(OrderRecord).filter(OrderRecord.image_id == image_id).first()
         order_id = order.id if order else None
 
     if not order_id:
-        return {"error": "No order record found for this image", "rows_found": 0}
+        return {"error": "No order record found for this image"}
 
     with session_scope() as s:
         s.query(MissingProduct).filter(MissingProduct.order_id == order_id).delete(synchronize_session=False)
@@ -286,14 +361,12 @@ def retry_failed_image(image_id: int) -> dict:
         img.processing_status = "processing"
         img.error_message = None
 
-    # Re-run enhancement from the original file in case display_path went missing.
-    with session_scope() as s:
-        img = s.get(ImageRecord, image_id)
-        source_path = img.filepath
-
     try:
         enhanced_path = enhance_image(source_path)
     except Exception:
-        pass  # fall back to whatever enhanced_path we already had
+        with session_scope() as s:
+            img = s.get(ImageRecord, image_id)
+            enhanced_path = img.display_path or img.filepath
 
-    return _run_extraction(enhanced_path, manual_retailer, image_id, order_id)
+    _EXECUTOR.submit(_run_extraction_safe, enhanced_path, manual_retailer, image_id, order_id)
+    return {"queued": True}
