@@ -54,11 +54,11 @@ else:
 USING_SQLITE_ON_SERVERLESS = IS_SERVERLESS and DATABASE_URL.startswith("sqlite")
 
 # --- Groq Vision model ---
-# You told us you have a working vision model on Groq: qwen/qwen3.6-27b.
+# You told us you have a working vision model on Groq: qwen/qwen3.8-27b.
 # We default to that, but it's fully overridable from the Settings page
 # or the .env file, in case the exact model slug changes on Groq's side.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "qwen/qwen3.6-27b")
+GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 # --- Detection / validation defaults (overridable in Settings page, stored in DB) ---
 DEFAULT_OCR_CONFIDENCE_THRESHOLD = 0.75
