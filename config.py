@@ -54,9 +54,11 @@ else:
 USING_SQLITE_ON_SERVERLESS = IS_SERVERLESS and DATABASE_URL.startswith("sqlite")
 
 # --- Groq Vision model ---
-# You told us you have a working vision model on Groq: qwen/qwen3.8-27b.
-# We default to that, but it's fully overridable from the Settings page
-# or the .env file, in case the exact model slug changes on Groq's side.
+# qwen/qwen3.6-27b was deprecated by Groq (retired in favor of qwen3.8-27b,
+# same 27B multimodal model family, same capabilities). This default is
+# fully overridable from the Settings page or the GROQ_MODEL env var, so a
+# future deprecation like this one never needs a code change again - just
+# update the setting/env var to whatever Groq's current vision model slug is.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL_DEFAULT = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
 

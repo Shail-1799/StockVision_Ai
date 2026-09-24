@@ -7,10 +7,12 @@ and return:
   2. ONLY the rows that are hand-marked with a cross (X) - i.e. the
      products that could not be supplied.
 
-Model: qwen/qwen3.8-27b is currently the only vision-capable model Groq
-serves (Llama 4 Scout/Maverick are deprecated or half-quota on this
-account's tier), so it's the right choice - the fix below is about calling
-it correctly, not switching models.
+Model: qwen/qwen3.8-27b (Groq deprecated the earlier qwen3.6-27b this
+model family previously used - same 27B multimodal model, same behavior,
+just a version bump; the actual model slug lives in config.GROQ_MODEL_DEFAULT
+and is overridable from Settings/the GROQ_MODEL env var, not hardcoded here,
+so the next deprecation like this one is a one-line config change, not a
+code change).
 
 --- Why requests were failing (413 "Request too large") ---
 qwen3.8-27b is a *reasoning* model: by default it "thinks" in a long
