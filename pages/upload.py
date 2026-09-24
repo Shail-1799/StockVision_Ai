@@ -4,16 +4,18 @@ import datetime as dt
 import dash
 from dash import html, dcc, callback, Output, Input, State
 import dash_bootstrap_components as dbc
-from flask import session
+from flask import session, request
 
 import config
 from services.processor import process_upload, get_image_status
+from services.browser_detect import detect_in_app_browser
 
 dash.register_page(__name__, path="/upload", name="Upload")
 
 layout = html.Div(
     [
         html.H3("Upload Order Sheets", className="mb-3"),
+        html.Div(id="upload-page-browser-warning"),
         dbc.Row(
             [
                 dbc.Col(
@@ -105,6 +107,26 @@ layout = html.Div(
         html.Div(id="upload-results-display"),
     ]
 )
+
+
+@callback(
+    Output("upload-page-browser-warning", "children"),
+    Input("retailer-name-input", "id"),  # fires once per page load, cheap trigger
+)
+def show_in_app_browser_warning(_):
+    app_name = detect_in_app_browser(request.headers.get("User-Agent", ""))
+    if not app_name:
+        return ""
+    return dbc.Alert(
+        [
+            html.Strong("Uploads will not work in this browser. "),
+            f"{app_name}'s built-in browser blocks photo uploads after you take/select a picture - "
+            "this is a bug in that app, not this one. Tap the ⋮ menu or share icon at the top of your "
+            "screen and choose \"Open in Chrome\" or \"Open in Safari\" before uploading.",
+        ],
+        color="danger",
+        className="mb-3",
+    )
 
 
 def _save_uploaded_file(filename, content_string) -> str:
